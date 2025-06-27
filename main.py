@@ -16,16 +16,16 @@ from model import LocalGlobalCrossAttentionModel
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=0, type=int)
+parser.add_argument('--fold_num', default=4, type=int)
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
 parser.add_argument('--shapelets_num', default=50, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.3, type=float, help= 'shaplets长度占时间序列长度的比例')
-parser.add_argument('--epochs', default=200, type=int)
+parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--lr', default=0.0005, type=float)
-parser.add_argument('--lambda_shape',default=1e-2)
-parser.add_argument('--lambda_div',default=1e-2)
+parser.add_argument('--lambda_shape',default=1e-3)
+parser.add_argument('--lambda_div',default=1e-3)
 
 args = parser.parse_args()
 
@@ -149,6 +149,7 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
         print("\n")
         #保存最高精确度模型
         if val_acc_list[-1] > best_acc:
+            print("更新模型：",best_acc," --> ", val_acc_list[-1])
             best_acc = val_acc_list[-1]
             best_model_wts = copy.deepcopy(model.state_dict())
 
