@@ -4,8 +4,6 @@ import logging
 import torch
 import torch.nn as nn
 import numpy as np
-import matplotlib.pyplot as plt
-from numpy.ma.core import shape
 
 import dataloader
 import copy
@@ -88,23 +86,23 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             loss = criterion(output,b_y)
 
 
-            # shape_reg = model.shapeconv.shape_regularization(b_x)
-            # div_reg = model.shapeconv.diversity_regularization()
-            #
-            # total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg
+            shape_reg = model.shapelet_transformer.shape_regularization(b_x)
+            div_reg = model.shapelet_transformer.diversity_regularization()
+
+            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg
 
             optimizer.zero_grad()
 
-            #total_loss.backward()
-            loss.backward()
+            total_loss.backward()
+            #loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
 
             #对损失函数进行累加
-            #train_loss +=total_loss.item()*b_x.size(0)
-            train_loss += loss.item() * b_x.size(0)
+            train_loss +=total_loss.item()*b_x.size(0)
+            #train_loss += loss.item() * b_x.size(0)
             #对精确度累加
             train_acc += torch.sum(pre_lab == b_y.data)
             #当前已经被用于训练的样本数量累加
@@ -122,14 +120,14 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             pre_lab = torch.argmax(output, dim=1)
             loss = criterion(output, b_y)
 
-            # shape_reg = model.shapeconv.shape_regularization(b_x)
-            # div_reg = model.shapeconv.diversity_regularization()
-            #
-            # total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg
+            shape_reg = model.shapelet_transformer.shape_regularization(b_x)
+            div_reg = model.shapelet_transformer.diversity_regularization()
+
+            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg
 
             # 对损失函数进行累加
-            #val_loss += total_loss.item() * b_x.size(0)
-            val_loss += loss.item() * b_x.size(0)
+            val_loss += total_loss.item() * b_x.size(0)
+            #val_loss += loss.item() * b_x.size(0)
             # 对精确度累加
             val_acc += torch.sum(pre_lab == b_y.data)
             # 当前已经被用于训练的样本数量累加
@@ -210,6 +208,8 @@ if __name__ == "__main__":
         num_classes=num_classes
     )
 
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"总可训练参数量: {total_params:,}")
 
     x_train = torch.tensor(data['X_train'], dtype=torch.float32)
     y_train_np = data['y_train']  # 获取numpy格式的y_train用于可视化

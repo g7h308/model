@@ -53,26 +53,79 @@ class ShapeConv(nn.Module):
             else:
                 self.conv.weight.data.normal_(0, 0.1)
 
+    # def shape_regularization(self, x):
+    #     """以向量化且可微分的方式计算shape正则化损失。"""
+    #     conv_out = self.conv(x)
+    #     shapelet_norm_sq = torch.sum(self.conv.weight ** 2, dim=(1, 2))
+    #     sub_sequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
+    #     sub_sequences_norm_sq = torch.sum(sub_sequences ** 2, dim=(1, 3))
+    #     norm_term = shapelet_norm_sq.view(1, -1, 1) + sub_sequences_norm_sq.unsqueeze(1)
+    #     shapelet_distances = norm_term - 2 * conv_out
+    #     min_distances, _ = torch.min(shapelet_distances, dim=2)
+    #     reg_loss = torch.mean(min_distances)
+    #     return reg_loss
+    #
+    # def diversity_regularization(self):
+    #     """计算多样性正则化项，防止shapelet之间过于相似。"""
+    #     weights = self.conv.weight.view(self.out_channels, -1)
+    #     # 计算所有 shapelet 两两之间的欧氏距离矩阵
+    #     dist_matrix = torch.cdist(weights, weights, p=2)
+    #     # 使用指数函数惩罚距离近的 shapelet 对，并取均值
+    #     diversity_loss = torch.exp(-dist_matrix).mean()
+    #     return diversity_loss
+
     def shape_regularization(self, x):
-        """以向量化且可微分的方式计算shape正则化损失。"""
+        """
+        以向量化且可微分的方式计算 shape 正则化损失。
+        """
+        # 这个计算过程与 forward 函数中的距离计算相呼应，
+        # 但我们确保得到的是真实的平方欧几里得距离。
         conv_out = self.conv(x)
+
+        # 计算范数的平方
         shapelet_norm_sq = torch.sum(self.conv.weight ** 2, dim=(1, 2))
+
         sub_sequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
         sub_sequences_norm_sq = torch.sum(sub_sequences ** 2, dim=(1, 3))
+
+        # 通过广播（broadcasting）来计算配对的范数和
+        # shapelet_norm_sq: (out_channels) -> (1, out_channels, 1)
+        # sub_sequences_norm_sq: (batch_size, seq_len') -> (batch_size, 1, seq_len')
         norm_term = shapelet_norm_sq.view(1, -1, 1) + sub_sequences_norm_sq.unsqueeze(1)
+
+        # 平方欧几里得距离: D^2 = S^2 + T^2 - 2*S*T
+        # shapelet_distances 的形状为 (batch_size, out_channels, seq_len')
         shapelet_distances = norm_term - 2 * conv_out
-        min_distances, _ = torch.min(shapelet_distances, dim=2)
+
+        # 对每个 shapelet，在每个样本中找到其与所有子序列的最小距离
+        # min() 返回一个元组 (values, indices)，我们只需要值。
+        min_distances, _ = torch.min(shapelet_distances, dim=2)  # 形状变为 (batch_size, out_channels)
+
+        # 正则化损失是这些最小距离的平均值
+        # 在所有 shapelet 和批次中的所有样本上取平均。
         reg_loss = torch.mean(min_distances)
+
         return reg_loss
 
+
     def diversity_regularization(self):
-        """计算多样性正则化项，防止shapelet之间过于相似。"""
-        weights = self.conv.weight.view(self.out_channels, -1)
-        # 计算所有 shapelet 两两之间的欧氏距离矩阵
-        dist_matrix = torch.cdist(weights, weights, p=2)
-        # 使用指数函数惩罚距离近的 shapelet 对，并取均值
-        diversity_loss = torch.exp(-dist_matrix).mean()
-        return diversity_loss
+        """
+        计算多样性正则化项，防止shapelet过于相似
+
+        返回:
+            torch.Tensor: 多样性正则化损失
+        """
+        weights = self.conv.weight  # (out_channels, in_channels, shapelet_length)
+        dist_matrix = torch.zeros(self.out_channels, self.out_channels)
+
+        for i in range(self.out_channels):
+            for j in range(self.out_channels):
+                if i != j:
+                    dist = torch.exp(-torch.norm(weights[i] - weights[j], p=2))
+                    dist_matrix[i, j] = dist
+
+        return torch.norm(dist_matrix, p='fro')
+
 
     def forward(self, x):
         """
@@ -132,21 +185,22 @@ class LocalGlobalCrossAttentionModel(nn.Module):
 
         # --- Global 分支 (全局特征提取) ---
         self.global_conv = nn.Sequential(
+            # padding='same'，的意思是要求程序自动调整paddng大小，保证输入与输出的高度和宽度一致，所以(batch_size, 1, channels, seq_length) --> (batch_size, 16, channels, seq_length)
             nn.Conv2d(in_channels=1, out_channels=16, kernel_size=(3, 5), padding='same'),
             nn.ReLU(),
+            # stride默认下与卷积核大小一致，(batch_size, 16, channels, seq_length) --> (batch_size, 16, channels, seq_length/2)
             nn.MaxPool2d(kernel_size=(1, 2)),
+            # padding='same'，所以(batch_size, 16, channels, seq_length/2) --> (batch_size, 32, channels, seq_length/2)
             nn.Conv2d(in_channels=16, out_channels=32, kernel_size=(3, 5), padding='same'),
             nn.ReLU(),
+            #(batch_size, 32, channels, seq_length/2) --> (batch_size, 32, channels, seq_length/4)
             nn.MaxPool2d(kernel_size=(1, 2))
         )
 
-        # --- 错误修复点 ---
-        # 最后一个Conv2d的输出通道是32，经过池化和展平后，送入线性层的特征数就是32。
-        # 原来的 `32 * in_channels` 是错误的。
         self.global_encoder = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(32, embed_dim),  # 将输入维度从 32 * in_channels 修改为 32
+            nn.Linear(32, embed_dim),
             nn.ReLU(),
             nn.LayerNorm(embed_dim)
         )
