@@ -3,92 +3,88 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class LearnableShapelet(nn.Module):
+class LearnableShapelet1D(nn.Module):
     """
-    一个模块，用于学习一组 Shapelet 并计算它们与输入时间序列的最小欧氏距离。
-    该模块为多通道设计，并借鉴了您第二个 main.py 的核心思想。
+    学习一组一维 Shapelet，并通过聚合各通道距离的方式与多通道时间序列进行匹配。
     """
 
-    def __init__(self, num_shapelets, in_channels, shapelet_length):
+    def __init__(self, num_shapelets, shapelet_length, in_channels, distance_aggregation='sum'):
         """
-        初始化可学习的 Shapelet 模块。
-
         参数:
-            num_shapelets (int): 要学习的 Shapelet 的数量 (K)。
-            in_channels (int): 输入时间序列的通道数 (M)。这是与参考代码的关键区别。
-            shapelet_length (int): 每个 Shapelet 的长度 (L)。
+            num_shapelets (int): Shapelet 的数量。
+            shapelet_length (int): Shapelet 的长度。
+            in_channels (int): 输入数据的通道数，用于计算距离。
+            distance_aggregation (str): 通道距离的聚合方式, 'sum' 或 'min'。
         """
         super().__init__()
         self.num_shapelets = num_shapelets
-        self.in_channels = in_channels
         self.shapelet_length = shapelet_length
+        self.in_channels = in_channels
+        self.distance_aggregation = distance_aggregation
 
-        # 1. 将 Shapelet 初始化为可学习的 nn.Parameter
-        # 形状为 (num_shapelets, in_channels, shapelet_length)，以支持多通道
-        shapelets_tensor = torch.randn(num_shapelets, in_channels, shapelet_length)
+        # 核心修改：Shapelet 现在是一维的
+        # 形状为 (num_shapelets, shapelet_length)
+        shapelets_tensor = torch.randn(num_shapelets, shapelet_length)
         self.shapelets = nn.Parameter(shapelets_tensor, requires_grad=True)
-        nn.init.uniform_(self.shapelets, -1, 1)  # 使用均匀分布进行初始化
+        nn.init.uniform_(self.shapelets, -1, 1)
 
     def _calculate_distances(self, x):
         """
-        以高效、可微分的方式计算距离。
-
-        参数:
-            x (torch.Tensor): 输入时间序列，形状为 (batch_size, in_channels, seq_length)。
-
-        返回:
-            torch.Tensor: 每个样本与每个 Shapelet 的最小平方欧氏距离，形状为 (batch_size, num_shapelets)。
+        高效地计算一维 Shapelet 与多通道序列的距离。
         """
-        # 将输入 x 展开成所有可能的子序列
-        # subsequences 形状: (batch_size, in_channels, num_subsequences, shapelet_length)
+        # x 形状: (B, M, Q) -> B=batch, M=in_channels, Q=seq_length
+        # subsequences 形状: (B, M, N, L) -> N=num_subsequences, L=shapelet_length
         subsequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
 
-        # 调整维度以进行广播计算
-        # sub_exp 形状: (batch_size, 1, in_channels, num_subsequences, shapelet_length)
-        # shp_exp 形状: (1, num_shapelets, in_channels, 1, shapelet_length)
-        sub_exp = subsequences.unsqueeze(1)
-        shp_exp = self.shapelets.unsqueeze(0).unsqueeze(3)
+        # self.shapelets 形状: (K, L) -> K=num_shapelets
 
-        # 计算差的平方，然后对通道(dim=2)和长度(dim=4)维度求和
-        # 得到每个子序列与每个 Shapelet 的平方欧氏距离
-        # distances_sq 形状: (batch_size, num_shapelets, num_subsequences)
-        distances_sq = torch.sum((sub_exp - shp_exp) ** 2, dim=(2, 4))
+        # 扩展维度以进行广播计算
+        # sub_exp 形状: (B, M, N, 1, L)
+        # shp_exp 形状: (1, 1, 1, K, L)
+        sub_exp = subsequences.unsqueeze(3)
+        shp_exp = self.shapelets.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        # 找到每个 Shapelet 对应的最小距离
-        # min_distances_sq 形状: (batch_size, num_shapelets)
-        min_distances_sq, _ = torch.min(distances_sq, dim=2)
+        # 计算差的平方，然后对长度维度(dim=4)求和
+        # 得到每个通道上，每个子序列与每个 Shapelet 的距离
+        # dist_per_channel 形状: (B, M, N, K)
+        dist_per_channel = torch.sum((sub_exp - shp_exp) ** 2, dim=4)
 
-        return min_distances_sq
+        # 核心修改：聚合来自不同通道(M, dim=1)的距离
+        if self.distance_aggregation == 'sum':
+            # 将各通道的距离相加
+            agg_dist = torch.sum(dist_per_channel, dim=1)
+        elif self.distance_aggregation == 'min':
+            # 找出在哪个通道上匹配得最好（距离最小）
+            agg_dist, _ = torch.min(dist_per_channel, dim=1)
+        else:
+            raise ValueError("distance_aggregation must be 'sum' or 'min'")
+
+        # agg_dist 形状: (B, N, K)
+
+        # 在所有子序列(N, dim=1)中找到最小距离
+        min_dist_sq, _ = torch.min(agg_dist, dim=1)
+        # min_dist_sq 形状: (B, K)
+
+        return min_dist_sq
 
     def forward(self, x):
-        """
-        前向传播，计算最小距离特征。
-        """
         return self._calculate_distances(x)
 
-    # --- 正则化函数 ---
-    # 注意：这些正则化函数与您第二个 main.py 中的 regConti 不同，
-    # 因为我们没有实现其独特的 posMap 参数。这些是更通用的正则化项。
-
-    def shape_regularization(self, x):
-        """
-        形态正则化：鼓励每个学习到的 Shapelet 接近训练集中的某个子序列。
-        """
-        min_dist_sq = self._calculate_distances(x)
-        min_dist_per_shapelet, _ = torch.min(min_dist_sq, dim=0)
-        reg_loss = torch.mean(min_dist_per_shapelet)
-        return reg_loss
-
     def diversity_regularization(self):
-        """
-        多样性正则化：惩罚过于相似的 Shapelet 对。
-        """
-        flat_shapelets = self.shapelets.view(self.num_shapelets, -1)
-        dist_matrix = torch.cdist(flat_shapelets, flat_shapelets, p=2)
+        """多样性正则化，与之前类似，但现在作用于一维 Shapelet。"""
+        # self.shapelets 形状: (K, L)
+        dist_matrix = torch.cdist(self.shapelets, self.shapelets, p=2)
         dist_matrix = dist_matrix + torch.eye(self.num_shapelets, device=dist_matrix.device) * 1e9
         diversity_loss = torch.exp(-dist_matrix).triu(diagonal=1).sum()
         num_pairs = self.num_shapelets * (self.num_shapelets - 1) / 2
-        return diversity_loss / max(1, num_pairs)  # 避免除以零
+        return diversity_loss / max(1, num_pairs)
+
+    def shape_regularization(self, x):
+        """形态正则化也需要遵循新的距离计算逻辑。"""
+        min_dist_sq = self._calculate_distances(x)  # (B, K)
+        min_dist_per_shapelet, _ = torch.min(min_dist_sq, dim=0)  # (K)
+        reg_loss = torch.mean(min_dist_per_shapelet)
+        return reg_loss
 
 # =============================================================================
 # 这是根据流程图实现的新模型。
@@ -115,10 +111,11 @@ class LocalGlobalCrossAttentionModel(nn.Module):
         super().__init__()
 
         # --- Local 分支 (局部特征提取) ---
-        self.shapelet_transformer = LearnableShapelet(
+        self.shapelet_transformer = LearnableShapelet1D(
             num_shapelets=num_shapelets,
+            shapelet_length=shapelet_length,
             in_channels=in_channels,
-            shapelet_length=shapelet_length
+            distance_aggregation='min'  # 您可以在这里选择 'sum' 或 'min'
         )
         self.local_encoder = nn.Sequential(
             nn.Linear(num_shapelets, embed_dim),

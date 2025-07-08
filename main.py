@@ -16,11 +16,11 @@ from model import LocalGlobalCrossAttentionModel
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=3, type=int)
+parser.add_argument('--fold_num', default=0, type=int)
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
-parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
+parser.add_argument('--shapelets_num', default=20, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.3, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
