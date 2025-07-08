@@ -3,149 +3,92 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# =============================================================================
-# 它实现了图中“local”分支的核心——形态基元（shapelet）发现机制。
-# 对应图中的: 可学习张量 -> shapelets -> (部分) local features
-# =============================================================================
+class LearnableShapelet(nn.Module):
+    """
+    一个模块，用于学习一组 Shapelet 并计算它们与输入时间序列的最小欧氏距离。
+    该模块为多通道设计，并借鉴了您第二个 main.py 的核心思想。
+    """
 
-class ShapeConv(nn.Module):
-    def __init__(self, in_channels, out_channels, shapelet_length, num_classes=None, supervised=True):
+    def __init__(self, num_shapelets, in_channels, shapelet_length):
         """
-        初始化ShapeConv层。
+        初始化可学习的 Shapelet 模块。
 
         参数:
-            in_channels (int): 输入通道数。
-            out_channels (int): 输出通道数（即shapelet的数量）。
-            shapelet_length (int): 每个shapelet的长度。
-            num_classes (int): 分类任务的类别数（在监督学习时使用）。
-            supervised (bool): 是否为监督学习模式的标志。
+            num_shapelets (int): 要学习的 Shapelet 的数量 (K)。
+            in_channels (int): 输入时间序列的通道数 (M)。这是与参考代码的关键区别。
+            shapelet_length (int): 每个 Shapelet 的长度 (L)。
         """
-        super(ShapeConv, self).__init__()
+        super().__init__()
+        self.num_shapelets = num_shapelets
         self.in_channels = in_channels
-        self.out_channels = out_channels
         self.shapelet_length = shapelet_length
-        self.num_classes = num_classes
-        self.supervised = supervised
 
-        # 定义卷积核（即shapelets）
-        self.conv = nn.Conv1d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=shapelet_length,
-            stride=1,
-            padding=0,
-            bias=False
-        )
-        self._initialize_shapelets()
+        # 1. 将 Shapelet 初始化为可学习的 nn.Parameter
+        # 形状为 (num_shapelets, in_channels, shapelet_length)，以支持多通道
+        shapelets_tensor = torch.randn(num_shapelets, in_channels, shapelet_length)
+        self.shapelets = nn.Parameter(shapelets_tensor, requires_grad=True)
+        nn.init.uniform_(self.shapelets, -1, 1)  # 使用均匀分布进行初始化
 
-    def _initialize_shapelets(self):
-        """初始化shapelet权重（监督或无监督模式）。"""
-        with torch.no_grad():
-            if self.supervised and self.num_classes is not None:
-                k = self.out_channels // self.num_classes
-                for i in range(self.num_classes):
-                    for j in range(k):
-                        torch.manual_seed(42 + i * k + j)
-                        idx = i * k + j
-                        weight_slice = self.conv.weight.data[idx]
-                        nn.init.uniform_(weight_slice, a=-2.0, b=2.0)
-            else:
-                self.conv.weight.data.normal_(0, 0.1)
-
-    # def shape_regularization(self, x):
-    #     """以向量化且可微分的方式计算shape正则化损失。"""
-    #     conv_out = self.conv(x)
-    #     shapelet_norm_sq = torch.sum(self.conv.weight ** 2, dim=(1, 2))
-    #     sub_sequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
-    #     sub_sequences_norm_sq = torch.sum(sub_sequences ** 2, dim=(1, 3))
-    #     norm_term = shapelet_norm_sq.view(1, -1, 1) + sub_sequences_norm_sq.unsqueeze(1)
-    #     shapelet_distances = norm_term - 2 * conv_out
-    #     min_distances, _ = torch.min(shapelet_distances, dim=2)
-    #     reg_loss = torch.mean(min_distances)
-    #     return reg_loss
-    #
-    # def diversity_regularization(self):
-    #     """计算多样性正则化项，防止shapelet之间过于相似。"""
-    #     weights = self.conv.weight.view(self.out_channels, -1)
-    #     # 计算所有 shapelet 两两之间的欧氏距离矩阵
-    #     dist_matrix = torch.cdist(weights, weights, p=2)
-    #     # 使用指数函数惩罚距离近的 shapelet 对，并取均值
-    #     diversity_loss = torch.exp(-dist_matrix).mean()
-    #     return diversity_loss
-
-    def shape_regularization(self, x):
+    def _calculate_distances(self, x):
         """
-        以向量化且可微分的方式计算 shape 正则化损失。
-        """
-        # 这个计算过程与 forward 函数中的距离计算相呼应，
-        # 但我们确保得到的是真实的平方欧几里得距离。
-        conv_out = self.conv(x)
+        以高效、可微分的方式计算距离。
 
-        # 计算范数的平方
-        shapelet_norm_sq = torch.sum(self.conv.weight ** 2, dim=(1, 2))
-
-        sub_sequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
-        sub_sequences_norm_sq = torch.sum(sub_sequences ** 2, dim=(1, 3))
-
-        # 通过广播（broadcasting）来计算配对的范数和
-        # shapelet_norm_sq: (out_channels) -> (1, out_channels, 1)
-        # sub_sequences_norm_sq: (batch_size, seq_len') -> (batch_size, 1, seq_len')
-        norm_term = shapelet_norm_sq.view(1, -1, 1) + sub_sequences_norm_sq.unsqueeze(1)
-
-        # 平方欧几里得距离: D^2 = S^2 + T^2 - 2*S*T
-        # shapelet_distances 的形状为 (batch_size, out_channels, seq_len')
-        shapelet_distances = norm_term - 2 * conv_out
-
-        # 对每个 shapelet，在每个样本中找到其与所有子序列的最小距离
-        # min() 返回一个元组 (values, indices)，我们只需要值。
-        min_distances, _ = torch.min(shapelet_distances, dim=2)  # 形状变为 (batch_size, out_channels)
-
-        # 正则化损失是这些最小距离的平均值
-        # 在所有 shapelet 和批次中的所有样本上取平均。
-        reg_loss = torch.mean(min_distances)
-
-        return reg_loss
-
-
-    def diversity_regularization(self):
-        """
-        计算多样性正则化项，防止shapelet过于相似
+        参数:
+            x (torch.Tensor): 输入时间序列，形状为 (batch_size, in_channels, seq_length)。
 
         返回:
-            torch.Tensor: 多样性正则化损失
+            torch.Tensor: 每个样本与每个 Shapelet 的最小平方欧氏距离，形状为 (batch_size, num_shapelets)。
         """
-        weights = self.conv.weight  # (out_channels, in_channels, shapelet_length)
-        dist_matrix = torch.zeros(self.out_channels, self.out_channels)
+        # 将输入 x 展开成所有可能的子序列
+        # subsequences 形状: (batch_size, in_channels, num_subsequences, shapelet_length)
+        subsequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
 
-        for i in range(self.out_channels):
-            for j in range(self.out_channels):
-                if i != j:
-                    dist = torch.exp(-torch.norm(weights[i] - weights[j], p=2))
-                    dist_matrix[i, j] = dist
+        # 调整维度以进行广播计算
+        # sub_exp 形状: (batch_size, 1, in_channels, num_subsequences, shapelet_length)
+        # shp_exp 形状: (1, num_shapelets, in_channels, 1, shapelet_length)
+        sub_exp = subsequences.unsqueeze(1)
+        shp_exp = self.shapelets.unsqueeze(0).unsqueeze(3)
 
-        return torch.norm(dist_matrix, p='fro')
+        # 计算差的平方，然后对通道(dim=2)和长度(dim=4)维度求和
+        # 得到每个子序列与每个 Shapelet 的平方欧氏距离
+        # distances_sq 形状: (batch_size, num_shapelets, num_subsequences)
+        distances_sq = torch.sum((sub_exp - shp_exp) ** 2, dim=(2, 4))
 
+        # 找到每个 Shapelet 对应的最小距离
+        # min_distances_sq 形状: (batch_size, num_shapelets)
+        min_distances_sq, _ = torch.min(distances_sq, dim=2)
+
+        return min_distances_sq
 
     def forward(self, x):
         """
-        前向传播，计算shapelet变换。
-        这里计算的是一个与最小平方欧氏距离成正比的值。
+        前向传播，计算最小距离特征。
         """
-        conv_out = self.conv(x)
-        shapelet_norm = torch.sum(self.conv.weight ** 2, dim=(1, 2)) / 2
-        batch_size, _, seq_length = x.shape
-        sub_sequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
-        input_norm = torch.sum(sub_sequences ** 2, dim=(1, 3)) / 2
+        return self._calculate_distances(x)
 
-        shapelet_norm = shapelet_norm.view(1, -1, 1)
-        input_norm = input_norm.view(batch_size, 1, -1)
-        norm_term = shapelet_norm + input_norm
+    # --- 正则化函数 ---
+    # 注意：这些正则化函数与您第二个 main.py 中的 regConti 不同，
+    # 因为我们没有实现其独特的 posMap 参数。这些是更通用的正则化项。
 
-        features = conv_out - norm_term
-        features = F.max_pool1d(features, kernel_size=features.size(-1)).squeeze(-1)
-        features = -2 * features
-        return features
+    def shape_regularization(self, x):
+        """
+        形态正则化：鼓励每个学习到的 Shapelet 接近训练集中的某个子序列。
+        """
+        min_dist_sq = self._calculate_distances(x)
+        min_dist_per_shapelet, _ = torch.min(min_dist_sq, dim=0)
+        reg_loss = torch.mean(min_dist_per_shapelet)
+        return reg_loss
 
+    def diversity_regularization(self):
+        """
+        多样性正则化：惩罚过于相似的 Shapelet 对。
+        """
+        flat_shapelets = self.shapelets.view(self.num_shapelets, -1)
+        dist_matrix = torch.cdist(flat_shapelets, flat_shapelets, p=2)
+        dist_matrix = dist_matrix + torch.eye(self.num_shapelets, device=dist_matrix.device) * 1e9
+        diversity_loss = torch.exp(-dist_matrix).triu(diagonal=1).sum()
+        num_pairs = self.num_shapelets * (self.num_shapelets - 1) / 2
+        return diversity_loss / max(1, num_pairs)  # 避免除以零
 
 # =============================================================================
 # 这是根据流程图实现的新模型。
@@ -172,9 +115,10 @@ class LocalGlobalCrossAttentionModel(nn.Module):
         super().__init__()
 
         # --- Local 分支 (局部特征提取) ---
-        self.shapelet_transformer = ShapeConv(
-            in_channels=in_channels, out_channels=num_shapelets,
-            shapelet_length=shapelet_length, num_classes=num_classes
+        self.shapelet_transformer = LearnableShapelet(
+            num_shapelets=num_shapelets,
+            in_channels=in_channels,
+            shapelet_length=shapelet_length
         )
         self.local_encoder = nn.Sequential(
             nn.Linear(num_shapelets, embed_dim),
