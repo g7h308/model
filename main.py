@@ -20,12 +20,13 @@ parser.add_argument('--fold_num', default=0, type=int)
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
-parser.add_argument('--shapelets_num', default=20, type=int, help='总的shapelets数量，每个class均分')
+parser.add_argument('--shapelets_num', default=30, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.3, type=float, help= 'shaplets长度占时间序列长度的比例')
-parser.add_argument('--epochs', default=100, type=int)
+parser.add_argument('--epochs', default=50, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
 parser.add_argument('--lambda_div',default=1e-3)
+parser.add_argument('--lambda_penalty',default=1e-3)
 
 args = parser.parse_args()
 
@@ -88,9 +89,10 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             # *** 调用新的正则化函数 ***
             shape_reg = model.shapelet_transformer.shape_regularization(b_x)
             div_reg = model.shapelet_transformer.diversity_regularization()
-
-            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg
-
+            lambda_penalty = config['lambda_penalty']
+            penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
+                                                                            lambda_l2=lambda_penalty)
+            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
             optimizer.zero_grad()
 
             total_loss.backward()
@@ -187,8 +189,9 @@ if __name__ == "__main__":
     config = args.__dict__
     config['data_dir'] = config['data_path'] + "/" + config['problem']
     data = dataloader.load(config)
-    print(data['X_train'].shape)
-    print(data['y_train'].shape)
+    print("train_size: ", data['X_train'].shape)
+    print("val_size: ", data['X_val'].shape)
+    print("test_size: ", data['X_test'].shape)
 
 
     # 输入参数
@@ -204,6 +207,7 @@ if __name__ == "__main__":
     # 创建模型
     model = LocalGlobalCrossAttentionModel(
         in_channels=in_channels,
+        seq_length=seq_length,
         num_shapelets=out_channels,
         shapelet_length=shapelet_length,
         num_classes=num_classes

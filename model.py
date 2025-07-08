@@ -3,120 +3,169 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class LearnableShapelet1D(nn.Module):
+# =============================================================================
+# Local Branch Core Component: ShapeletBlock
+# 管理单个一维Shapelet及其对应的二维(通道-位置)惩罚/权重矩阵。
+# =============================================================================
+
+class ShapeletBlock(nn.Module):
     """
-    学习一组一维 Shapelet，并通过聚合各通道距离的方式与多通道时间序列进行匹配。
+    管理单个一维 Shapelet 及其对应的二维(通道-位置)惩罚矩阵。
     """
 
-    def __init__(self, num_shapelets, shapelet_length, in_channels, distance_aggregation='sum'):
+    def __init__(self, shapelet_length, in_channels, seq_length):
+        super().__init__()
+        self.shapelet_length = shapelet_length
+        self.in_channels = in_channels
+
+        # 1. 定义一维 Shapelet
+        self.shapelet = nn.Parameter(torch.randn(shapelet_length), requires_grad=True)
+        nn.init.uniform_(self.shapelet, -1, 1)
+
+        # 2. 定义二维惩罚/权重图
+        num_positions = seq_length - shapelet_length + 1  #shapelet的起始位置只能从0到seq_length - shapelet_length + 1上进行选择
+        # penalty_map : (in_channels, num_positions)   #初始惩罚值全为0，标明起始对所有通道、所有位置都是平等的
+        self.penalty_map = nn.Parameter(torch.zeros(in_channels, num_positions), requires_grad=True)
+
+    def forward(self, subsequences):
         """
+        计算加权距离。
+
         参数:
-            num_shapelets (int): Shapelet 的数量。
-            shapelet_length (int): Shapelet 的长度。
-            in_channels (int): 输入数据的通道数，用于计算距离。
-            distance_aggregation (str): 通道距离的聚合方式, 'sum' 或 'min'。
+            subsequences (torch.Tensor): 形状为 (B, M, N, L) 的输入子序列。
+                                         B=batch, M=in_channels, N=num_positions, L=shapelet_length
+
+        返回:
+            torch.Tensor: 对所有子序列计算的加权距离，形状为 (B, N)。
         """
+        # self.shapelet 形状: (L) -> 扩展后 (1, 1, 1, L)
+        shp_exp = self.shapelet.view(1, 1, 1, -1)
+
+        # 计算每个通道、每个位置的原始平方距离
+        # raw_dist_sq 形状: (B, M, N)
+        raw_dist_sq = torch.sum((subsequences - shp_exp) ** 2, dim=3)
+
+        # 计算惩罚/权重因子, 使用 elu(-m)+1 形式确保权重为正且初始接近1
+        # penalty 形状: (M, N) -> 扩展后 (1, M, N)
+        penalty = F.elu(-self.penalty_map) + 2.0
+        penalty_exp = penalty.unsqueeze(0)
+
+        # 将原始距离与惩罚/权重相乘
+        # weighted_dist_sq 形状: (B, M, N)
+        weighted_dist_sq = raw_dist_sq * penalty_exp
+
+        # 将所有通道的加权距离相加，得到每个位置的总加权距离
+        # total_weighted_dist 形状: (B, N)
+        total_weighted_dist = torch.sum(weighted_dist_sq, dim=1)
+
+        return total_weighted_dist
+
+
+# =============================================================================
+# Local Branch Main Module: LearnableShapeletWithPenalty
+# 作为所有ShapeletBlock的容器，并整合所有正则化方法。
+# =============================================================================
+
+class LearnableShapeletWithPenalty(nn.Module):
+    def __init__(self, num_shapelets, shapelet_length, in_channels, seq_length):
         super().__init__()
         self.num_shapelets = num_shapelets
         self.shapelet_length = shapelet_length
-        self.in_channels = in_channels
-        self.distance_aggregation = distance_aggregation
 
-        # 核心修改：Shapelet 现在是一维的
-        # 形状为 (num_shapelets, shapelet_length)
-        shapelets_tensor = torch.randn(num_shapelets, shapelet_length)
-        self.shapelets = nn.Parameter(shapelets_tensor, requires_grad=True)
-        nn.init.uniform_(self.shapelets, -1, 1)
-
-    def _calculate_distances(self, x):
-        """
-        高效地计算一维 Shapelet 与多通道序列的距离。
-        """
-        # x 形状: (B, M, Q) -> B=batch, M=in_channels, Q=seq_length
-        # subsequences 形状: (B, M, N, L) -> N=num_subsequences, L=shapelet_length
-        subsequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
-
-        # self.shapelets 形状: (K, L) -> K=num_shapelets
-
-        # 扩展维度以进行广播计算
-        # sub_exp 形状: (B, M, N, 1, L)
-        # shp_exp 形状: (1, 1, 1, K, L)
-        sub_exp = subsequences.unsqueeze(3)
-        shp_exp = self.shapelets.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-        # 计算差的平方，然后对长度维度(dim=4)求和
-        # 得到每个通道上，每个子序列与每个 Shapelet 的距离
-        # dist_per_channel 形状: (B, M, N, K)
-        dist_per_channel = torch.sum((sub_exp - shp_exp) ** 2, dim=4)
-
-        # 核心修改：聚合来自不同通道(M, dim=1)的距离
-        if self.distance_aggregation == 'sum':
-            # 将各通道的距离相加
-            agg_dist = torch.sum(dist_per_channel, dim=1)
-        elif self.distance_aggregation == 'min':
-            # 找出在哪个通道上匹配得最好（距离最小）
-            agg_dist, _ = torch.min(dist_per_channel, dim=1)
-        else:
-            raise ValueError("distance_aggregation must be 'sum' or 'min'")
-
-        # agg_dist 形状: (B, N, K)
-
-        # 在所有子序列(N, dim=1)中找到最小距离
-        min_dist_sq, _ = torch.min(agg_dist, dim=1)
-        # min_dist_sq 形状: (B, K)
-
-        return min_dist_sq
+        # 创建一个 ModuleList 来容纳所有的 ShapeletBlock
+        self.shapelet_blocks = nn.ModuleList(
+            [ShapeletBlock(shapelet_length, in_channels, seq_length) for _ in range(num_shapelets)]
+        )
 
     def forward(self, x):
-        return self._calculate_distances(x)
+        """
+        前向传播，计算所有 Shapelet 的最小加权距离特征。
+        """
+        # 预先展开输入 x，所有 block 共享, x将会转化为不同开始位置的子序列
+
+        # subsequences 形状: (B, M, N, L)   其中M=in_channels, N = seq_length - shapelet_length+1
+        subsequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
+
+        all_min_distances = []
+        for block in self.shapelet_blocks:
+            # total_weighted_dist 形状: (B, N)
+            total_weighted_dist = block(subsequences)
+
+            # 找到当前 Shapelet 在所有位置上的最小加权距离
+            min_dist, _ = torch.min(total_weighted_dist, dim=1)
+            all_min_distances.append(min_dist)
+
+        # 将所有最小距离堆叠成最终的特征向量
+        # shapelet_features 形状: (B, K)
+        shapelet_features = torch.stack(all_min_distances, dim=1)
+
+        return shapelet_features
 
     def diversity_regularization(self):
-        """多样性正则化，与之前类似，但现在作用于一维 Shapelet。"""
-        # self.shapelets 形状: (K, L)
-        dist_matrix = torch.cdist(self.shapelets, self.shapelets, p=2)
+        """对所有一维 Shapelet 计算多样性"""
+        if self.num_shapelets <= 1:
+            return 0.0
+
+        all_shapelets = torch.stack([block.shapelet for block in self.shapelet_blocks])
+        dist_matrix = torch.cdist(all_shapelets, all_shapelets, p=2)
         dist_matrix = dist_matrix + torch.eye(self.num_shapelets, device=dist_matrix.device) * 1e9
         diversity_loss = torch.exp(-dist_matrix).triu(diagonal=1).sum()
         num_pairs = self.num_shapelets * (self.num_shapelets - 1) / 2
-        return diversity_loss / max(1, num_pairs)
+        return diversity_loss / num_pairs
 
     def shape_regularization(self, x):
-        """形态正则化也需要遵循新的距离计算逻辑。"""
-        min_dist_sq = self._calculate_distances(x)  # (B, K)
-        min_dist_per_shapelet, _ = torch.min(min_dist_sq, dim=0)  # (K)
-        reg_loss = torch.mean(min_dist_per_shapelet)
-        return reg_loss
+        """形态正则化，基于无惩罚的原始距离"""
+        subsequences = x.unfold(dimension=2, size=self.shapelet_length, step=1)
+        total_reg_loss = 0.0
+
+        for block in self.shapelet_blocks:
+            shp_exp = block.shapelet.view(1, 1, 1, -1)
+            # 聚合通道和长度维度，得到原始平方距离
+            raw_dist_sq_per_pos = torch.sum((subsequences - shp_exp) ** 2, dim=(1, 3))  # (B, N)
+            min_raw_dist, _ = torch.min(raw_dist_sq_per_pos, dim=1)  # (B,)
+            total_reg_loss += torch.mean(min_raw_dist)
+
+        return total_reg_loss / self.num_shapelets
+
+    def penalty_regularization(self, lambda_l1=1e-5, lambda_l2=1e-5):
+        """对 penalty_map 施加平滑性正则化"""
+        reg_loss = 0.0
+        for block in self.shapelet_blocks:
+            pmap = block.penalty_map  # (M, N)
+            # 位置平滑性 (沿 N 维度)
+            if pmap.shape[1] > 1:
+                pos_diff = pmap[:, 1:] - pmap[:, :-1]
+                reg_loss += lambda_l2 * torch.sum(pos_diff ** 2) + lambda_l1 * torch.sum(torch.abs(pos_diff))
+            # 通道平滑性 (沿 M 维度)
+            if pmap.shape[0] > 1:
+                chan_diff = pmap[1:, :] - pmap[:-1, :]
+                reg_loss += lambda_l2 * torch.sum(chan_diff ** 2) + lambda_l1 * torch.sum(torch.abs(chan_diff))
+
+        return reg_loss / self.num_shapelets
+
 
 # =============================================================================
-# 这是根据流程图实现的新模型。
+# Main Model: LocalGlobalCrossAttentionModel
+# 最终的模型框架，整合了局部和全局分支。
 # =============================================================================
 
 class LocalGlobalCrossAttentionModel(nn.Module):
     """
-    实现流程图中的网络模型，通过交叉注意力（cross-attention）
-    融合了局部的、基于shapelet的特征和全局的卷积特征。
+    通过交叉注意力融合局部（基于加权Shapelet）和全局（基于CNN）特征的模型。
     """
 
-    def __init__(self, in_channels, num_shapelets, shapelet_length,
+    def __init__(self, in_channels, seq_length, num_shapelets, shapelet_length,
                  num_classes, embed_dim=64, n_heads=8):
-        """
-        参数:
-            in_channels (int): 输入时间序列的通道数。
-            seq_length (int): 输入时间序列的长度。
-            num_shapelets (int): 要学习的shapelet数量（图中的 K）。
-            shapelet_length (int): 每个shapelet的长度（图中的 l1）。
-            num_classes (int): 用于分类的输出类别数。
-            embed_dim (int): 注意力机制之前的特征嵌入维度。
-            n_heads (int): 多头注意力的头数。
-        """
         super().__init__()
 
-        # --- Local 分支 (局部特征提取) ---
-        self.shapelet_transformer = LearnableShapelet1D(
+        # --- Local 分支 (使用带有惩罚图的最终模块) ---
+        self.shapelet_transformer = LearnableShapeletWithPenalty(
             num_shapelets=num_shapelets,
             shapelet_length=shapelet_length,
             in_channels=in_channels,
-            distance_aggregation='min'  # 您可以在这里选择 'sum' 或 'min'
+            seq_length=seq_length  # 新模块需要 seq_length 来确定惩罚图大小
         )
+
         self.local_encoder = nn.Sequential(
             nn.Linear(num_shapelets, embed_dim),
             nn.ReLU(),
@@ -125,15 +174,11 @@ class LocalGlobalCrossAttentionModel(nn.Module):
 
         # --- Global 分支 (全局特征提取) ---
         self.global_conv = nn.Sequential(
-            # padding='same'，的意思是要求程序自动调整paddng大小，保证输入与输出的高度和宽度一致，所以(batch_size, 1, channels, seq_length) --> (batch_size, 16, channels, seq_length)
             nn.Conv2d(in_channels=1, out_channels=16, kernel_size=(3, 5), padding='same'),
             nn.ReLU(),
-            # stride默认下与卷积核大小一致，(batch_size, 16, channels, seq_length) --> (batch_size, 16, channels, seq_length/2)
             nn.MaxPool2d(kernel_size=(1, 2)),
-            # padding='same'，所以(batch_size, 16, channels, seq_length/2) --> (batch_size, 32, channels, seq_length/2)
             nn.Conv2d(in_channels=16, out_channels=32, kernel_size=(3, 5), padding='same'),
             nn.ReLU(),
-            #(batch_size, 32, channels, seq_length/2) --> (batch_size, 32, channels, seq_length/4)
             nn.MaxPool2d(kernel_size=(1, 2))
         )
 
@@ -167,68 +212,22 @@ class LocalGlobalCrossAttentionModel(nn.Module):
             torch.Tensor: 分类的logits（原始分数），形状为 (batch_size, num_classes)。
         """
         # --- Local 分支路径 ---
-        shapelet_features = self.shapelet_transformer(x)  # (批次, shapelet数量)
-        local_features = self.local_encoder(shapelet_features)  # (批次, embed_dim)
+        shapelet_features = self.shapelet_transformer(x)
+        local_features = self.local_encoder(shapelet_features)
 
         # --- Global 分支路径 ---
-        # 增加一个维度以适应 Conv2D
-        x_2d = x.unsqueeze(1)  # (批次, 1, 通道数, 序列长度)
-        conv_maps = self.global_conv(x_2d)  # (批次, 32, 通道数, 序列长度/4)
-        global_features = self.global_encoder(conv_maps)  # (批次, embed_dim)
+        x_2d = x.unsqueeze(1)
+        conv_maps = self.global_conv(x_2d)
+        global_features = self.global_encoder(conv_maps)
 
         # --- 通过交叉注意力进行融合 ---
-        # Q = [local features], K=V = [global features]
-        # 为 batch_first=True 的注意力机制调整形状: (批次, 序列长度, 特征数)
-        query = local_features.unsqueeze(1)  # (批次, 1, embed_dim)
-        key = global_features.unsqueeze(1)  # (批次, 1, embed_dim)
-        value = global_features.unsqueeze(1)  # (批次, 1, embed_dim)
-
+        query = local_features.unsqueeze(1)
+        key = global_features.unsqueeze(1)
+        value = global_features.unsqueeze(1)
         attn_output, _ = self.cross_attention(query, key, value)
-        fused_features = attn_output.squeeze(1)  # (批次, embed_dim)
+        fused_features = attn_output.squeeze(1)
 
         # --- 最终分类 ---
-        logits = self.mlp(fused_features)  # (批次, 类别数)
+        logits = self.mlp(fused_features)
 
         return logits
-
-
-if __name__ == '__main__':
-    # --- 使用示例 ---
-    BATCH_SIZE = 32
-    IN_CHANNELS = 3  # 例如，一个三轴加速度计信号
-    SEQ_LENGTH = 256
-    NUM_CLASSES = 6
-
-    NUM_SHAPELETS = 50
-    SHAPELET_LENGTH = 30
-    EMBED_DIM = 128
-    N_HEADS = 8
-
-    # 创建一个虚拟输入张量
-    dummy_input = torch.randn(BATCH_SIZE, IN_CHANNELS, SEQ_LENGTH)
-
-    # 实例化模型
-    model = LocalGlobalCrossAttentionModel(
-        in_channels=IN_CHANNELS,
-        seq_length=SEQ_LENGTH,
-        num_shapelets=NUM_SHAPELETS,
-        shapelet_length=SHAPELET_LENGTH,
-        num_classes=NUM_CLASSES,
-        embed_dim=EMBED_DIM,
-        n_heads=N_HEADS
-    )
-
-    # 执行一次前向传播
-    output = model(dummy_input)
-
-    # 打印模型结构和输出形状
-    print("--- 模型测试 ---")
-    print(f"输入形状:  {dummy_input.shape}")
-    print(f"输出形状: {output.shape}")
-
-    # 检查输出形状是否正确
-    assert output.shape == (BATCH_SIZE, NUM_CLASSES)
-    print("\n✅ 测试通过: 输出形状正确。")
-
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"总可训练参数量: {total_params:,}")
