@@ -19,8 +19,11 @@ class ShapeletBlock(nn.Module):
         self.in_channels = in_channels
 
         # 1. 定义一维 Shapelet
-        self.shapelet = nn.Parameter(torch.randn(shapelet_length), requires_grad=True)
-        nn.init.uniform_(self.shapelet, -1, 1)
+        initial_tensor = torch.empty(shapelet_length)
+        # 2. 使用你想要的分布（uniform）来初始化它
+        nn.init.uniform_(initial_tensor, -1, 1)
+        # 3. 封装成 nn.Parameter
+        self.shapelet = nn.Parameter(initial_tensor, requires_grad=True)
 
         # 2. 定义二维惩罚/权重图
         num_positions = seq_length - shapelet_length + 1  #shapelet的起始位置只能从0到seq_length - shapelet_length + 1上进行选择
@@ -157,6 +160,9 @@ class LocalGlobalCrossAttentionModel(nn.Module):
     def __init__(self, in_channels, seq_length, num_shapelets, shapelet_length,
                  num_classes, embed_dim=64, n_heads=8):
         super().__init__()
+
+        SEED = 42
+        torch.manual_seed(SEED)
 
         # --- Local 分支 (使用带有惩罚图的最终模块) ---
         self.shapelet_transformer = LearnableShapeletWithPenalty(

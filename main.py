@@ -9,6 +9,7 @@ import dataloader
 import copy
 import time
 from torch.utils.data import DataLoader, TensorDataset
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from model import LocalGlobalCrossAttentionModel
 
 
@@ -16,13 +17,13 @@ from model import LocalGlobalCrossAttentionModel
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=0, type=int)
+parser.add_argument('--fold_num', default=4, type=int)
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
 parser.add_argument('--shapelets_num', default=30, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.3, type=float, help= 'shaplets长度占时间序列长度的比例')
-parser.add_argument('--epochs', default=50, type=int)
+parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
 parser.add_argument('--lambda_div',default=1e-3)
@@ -39,6 +40,10 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
 
     #优化器
     optimizer = torch.optim.Adam(model.parameters(),lr=config['lr'])
+
+    # 定义学习率调度器 ---
+    # 监控 'val_loss'，如果连续 5 个 epoch 验证损失没有下降，则学习率乘以 0.2
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.2, patience=5, verbose=True)
 
     #损失函数
     criterion = nn.CrossEntropyLoss()
@@ -92,7 +97,9 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             lambda_penalty = config['lambda_penalty']
             penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
                                                                             lambda_l2=lambda_penalty)
+
             total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
+            #total_loss = loss
             optimizer.zero_grad()
 
             total_loss.backward()
@@ -124,8 +131,10 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
 
             shape_reg = model.shapelet_transformer.shape_regularization(b_x)
             div_reg = model.shapelet_transformer.diversity_regularization()
-
-            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg
+            lambda_penalty = config['lambda_penalty']
+            penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
+                                                                            lambda_l2=lambda_penalty)
+            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
 
             # 对损失函数进行累加
             val_loss += total_loss.item() * b_x.size(0)
@@ -139,11 +148,17 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
         train_loss_list.append(train_loss / train_num)
         train_acc_list.append(train_acc.double().item() / train_num)
 
+        # 计算当前epoch的平均验证损失
+        epoch_val_loss = val_loss / val_num
+
         val_loss_list.append(val_loss / val_num)
         val_acc_list.append(val_acc.double().item() / val_num)
 
         print("第{}轮  trainloss：{:.4f}  train acc：{:.4f}".format(epoch+1,train_loss_list[-1],train_acc_list[-1]))
         print("第{}轮  valloss：  {:.4f}  val acc：  {:.4f}".format(epoch+1,val_loss_list[-1],val_acc_list[-1]))
+
+        # 在每个 epoch 结束后，用验证损失来更新学习率 ---
+        scheduler.step(epoch_val_loss)
 
         time_use = time.time()-since
         print("训练和验证耗费的时间{:.0f}m{:.0f}s".format(time_use//60, time_use%60))
