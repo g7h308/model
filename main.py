@@ -10,7 +10,9 @@ import copy
 import time
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from model import LocalGlobalCrossAttentionModel
+
+from model import LocalShapeletModel  # <<< MODIFIED: Changed model import
+from dataloaderMA import KFold_train_test_set, MA_subject_data
 
 
 #配置日志记录
@@ -18,11 +20,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fold_num', default=4, type=int)
-parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+
+#VFT任务
+#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+#MA任务
+parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/MA_fNIRS_data')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
-parser.add_argument('--shapelets_num', default=30, type=int, help='总的shapelets数量，每个class均分')
-parser.add_argument('--ratio', default=0.3, type=float, help= 'shaplets长度占时间序列长度的比例')
+parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
+parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
@@ -98,14 +104,14 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
                                                                             lambda_l2=lambda_penalty)
 
-            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
-            #total_loss = loss
+            #total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
+            total_loss = loss
             optimizer.zero_grad()
 
             total_loss.backward()
             #loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
 
@@ -158,7 +164,7 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
         print("第{}轮  valloss：  {:.4f}  val acc：  {:.4f}".format(epoch+1,val_loss_list[-1],val_acc_list[-1]))
 
         # 在每个 epoch 结束后，用验证损失来更新学习率 ---
-        scheduler.step(epoch_val_loss)
+        #scheduler.step(epoch_val_loss)
 
         time_use = time.time()-since
         print("训练和验证耗费的时间{:.0f}m{:.0f}s".format(time_use//60, time_use%60))
@@ -199,28 +205,61 @@ def test_model_process(model, test_dataloader):
 
 
 
-# 示例用法
 if __name__ == "__main__":
     config = args.__dict__
-    config['data_dir'] = config['data_path'] + "/" + config['problem']
-    data = dataloader.load(config)
-    print("train_size: ", data['X_train'].shape)
-    print("val_size: ", data['X_val'].shape)
-    print("test_size: ", data['X_test'].shape)
+
+    if config['data_path'] ==  '../TSCModel/RankSCL/RankSCL/ADHD':
+        config['data_dir'] = config['data_path'] + "/" + config['problem']
+        data = dataloader.load(config)
+        print("train_size: ", data['X_train'].shape)
+        print("val_size: ", data['X_val'].shape)
+        print("test_size: ", data['X_test'].shape)
+        x_train = torch.tensor(data['X_train'], dtype=torch.float32)
+        y_train_np = data['y_train']  # 获取numpy格式的y_train用于可视化
+        y_train = torch.tensor(data['y_train'], dtype=torch.long)
+        x_val = torch.tensor(data['X_val'], dtype=torch.float32)
+        y_val = torch.tensor(data['y_val'], dtype=torch.long)
+        x_test = torch.tensor(data['X_test'], dtype=torch.float32)
+        y_test = torch.tensor(data['y_test'], dtype=torch.long)
+
+        in_channels = len(data['X_train'][0])
+        seq_length = data['max_len']
+        num_classes = np.max(data['y_train']) + 1
+
+    else:
+        data_path = config['data_path']
+        sub_data, label = MA_subject_data(path=data_path, sub=29)
+        data_index = np.arange(60)
+        test_index = [np.arange(12), np.arange(12, 24), np.arange(24, 36), np.arange(36, 48), np.arange(48, 60)]
+        n_fold = config['fold_num']
+        x_train, y_train, x_val, y_val = KFold_train_test_set(sub_data, label, data_index, test_index, n_fold)
+        x_train = np.squeeze(x_train, axis=1)
+        x_val = np.squeeze(x_val, axis=1)
+
+        x_train = torch.tensor(x_train, dtype=torch.float32)
+        y_train = torch.tensor(y_train, dtype=torch.long)
+
+        x_val = torch.tensor(x_val, dtype=torch.float32)
+        y_val = torch.tensor(y_val, dtype=torch.long)
+
+        in_channels = len((x_train[0]))
+        seq_length = len(x_train[0][0])
+        num_classes = 2
 
 
     # 输入参数
 
-    in_channels = len(data['X_train'][0])
-    seq_length = data['max_len']
+    # in_channels = len(data['X_train'][0])
+    # seq_length = data['max_len']
     out_channels = config['shapelets_num']
     shapelet_length = int(seq_length*config['ratio'])
-    num_classes = np.max(data['y_train'])+1
+    #num_classes = np.max(data['y_train'])+1
 
 
 
     # 创建模型
-    model = LocalGlobalCrossAttentionModel(
+    # <<< MODIFIED: Instantiating the new LocalShapeletModel >>>
+    model = LocalShapeletModel(
         in_channels=in_channels,
         seq_length=seq_length,
         num_shapelets=out_channels,
@@ -231,18 +270,12 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"总可训练参数量: {total_params:,}")
 
-    x_train = torch.tensor(data['X_train'], dtype=torch.float32)
-    y_train_np = data['y_train']  # 获取numpy格式的y_train用于可视化
-    y_train = torch.tensor(data['y_train'], dtype=torch.long)
-    x_val = torch.tensor(data['X_val'], dtype=torch.float32)
-    y_val = torch.tensor(data['y_val'], dtype=torch.long)
-    x_test = torch.tensor(data['X_test'], dtype=torch.float32)
-    y_test = torch.tensor(data['y_test'], dtype=torch.long)
+
 
 
     train_dataset = TensorDataset(x_train, y_train)
     val_dataset = TensorDataset(x_val, y_val)
-    test_dataset = TensorDataset(x_test,y_test)
+    #test_dataset = TensorDataset(x_test,y_test)
 
     # Define batch size (adjust as needed)
     batch_size = config['batch_size']
@@ -250,7 +283,7 @@ if __name__ == "__main__":
     # Create DataLoader for training and validation
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset,batch_size = batch_size,shuffle=False)
+    #test_loader = DataLoader(test_dataset,batch_size = batch_size,shuffle=False)
 
     # 训练模型
     train_model_process(model,train_loader,val_loader,config)
@@ -259,4 +292,4 @@ if __name__ == "__main__":
     logging.info("Loading best model for testing...")
     model.load_state_dict(torch.load('best_model.pth'))
 
-    test_model_process(model, test_loader)
+    #test_model_process(model, test_loader)

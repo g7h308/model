@@ -148,92 +148,55 @@ class LearnableShapeletWithPenalty(nn.Module):
 
 
 # =============================================================================
-# Main Model: LocalGlobalCrossAttentionModel
-# 最终的模型框架，整合了局部和全局分支。
+# Main Model: LocalShapeletModel
+# The final model framework, containing only the local branch.
 # =============================================================================
 
-class LocalGlobalCrossAttentionModel(nn.Module):
+class LocalShapeletModel(nn.Module):
     """
-    通过交叉注意力融合局部（基于加权Shapelet）和全局（基于CNN）特征的模型。
+    A model that uses only the local branch (learnable shapelets with penalty maps)
+    for time series classification.
     """
 
-    def __init__(self, in_channels, seq_length, num_shapelets, shapelet_length,
-                 num_classes, embed_dim=64, n_heads=8):
+    def __init__(self, in_channels, seq_length, num_shapelets, shapelet_length, num_classes):
         super().__init__()
 
         SEED = 42
         torch.manual_seed(SEED)
 
-        # --- Local 分支 (使用带有惩罚图的最终模块) ---
+        # --- Local 分支 (The only branch) ---
         self.shapelet_transformer = LearnableShapeletWithPenalty(
             num_shapelets=num_shapelets,
             shapelet_length=shapelet_length,
             in_channels=in_channels,
-            seq_length=seq_length  # 新模块需要 seq_length 来确定惩罚图大小
-        )
-
-        self.local_encoder = nn.Sequential(
-            nn.Linear(num_shapelets, embed_dim),
-            nn.ReLU(),
-            nn.LayerNorm(embed_dim)
-        )
-
-        # --- Global 分支 (全局特征提取) ---
-        self.global_conv = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=(3, 5), padding='same'),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2)),
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=(3, 5), padding='same'),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=(1, 2))
-        )
-
-        self.global_encoder = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Linear(32, embed_dim),
-            nn.ReLU(),
-            nn.LayerNorm(embed_dim)
-        )
-
-        # --- 特征融合 (交叉注意力) ---
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=embed_dim, num_heads=n_heads, batch_first=True
+            seq_length=seq_length
         )
 
         # --- 最终分类器 (MLP) ---
+        # The input to the MLP is now the direct output of the shapelet transformer,
+        # which has a dimension of `num_shapelets`.
+        hidden_dim = 128
         self.mlp = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim // 2),
+            nn.Linear(num_shapelets, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(embed_dim // 2, num_classes)
+            nn.Dropout(0),
+            nn.Linear(hidden_dim, num_classes)
         )
 
     def forward(self, x):
         """
-        模型的正向传播。
-        参数:
-            x (torch.Tensor): 输入张量，形状为 (batch_size, in_channels, seq_length)。
-        返回:
-            torch.Tensor: 分类的logits（原始分数），形状为 (batch_size, num_classes)。
+        The model's forward pass.
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, in_channels, seq_length).
+        Returns:
+            torch.Tensor: Classification logits of shape (batch_size, num_classes).
         """
         # --- Local 分支路径 ---
+        # Get shapelet features of shape (batch_size, num_shapelets)
         shapelet_features = self.shapelet_transformer(x)
-        local_features = self.local_encoder(shapelet_features)
-
-        # --- Global 分支路径 ---
-        x_2d = x.unsqueeze(1)
-        conv_maps = self.global_conv(x_2d)
-        global_features = self.global_encoder(conv_maps)
-
-        # --- 通过交叉注意力进行融合 ---
-        query = local_features.unsqueeze(1)
-        key = global_features.unsqueeze(1)
-        value = global_features.unsqueeze(1)
-        attn_output, _ = self.cross_attention(query, key, value)
-        fused_features = attn_output.squeeze(1)
 
         # --- 最终分类 ---
-        logits = self.mlp(fused_features)
+        # Feed features directly into the MLP
+        logits = self.mlp(shapelet_features)
 
         return logits
