@@ -13,24 +13,26 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from model import LocalShapeletModel  # <<< MODIFIED: Changed model import
 from dataloaderMA import KFold_train_test_set, MA_subject_data
+from InterpGN import InterpGN
 
 
 #配置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=4, type=int)
+parser.add_argument('--fold_num', default=1, type=int)
 
 #VFT任务
-#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/MA_fNIRS_data')
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/MA_fNIRS_data')
+parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
 parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
-parser.add_argument('--lr', default=0.001, type=float)
+parser.add_argument('--lr', default=0.01, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
 parser.add_argument('--lambda_div',default=1e-3)
 parser.add_argument('--lambda_penalty',default=1e-3)
@@ -90,26 +92,29 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
         for step,(b_x,b_y) in enumerate(train_dataloader):
             b_x = b_x.to(device)
             b_y = b_y.to(device)
+            if config['model'] == 'ShapeletModel':
 
-            output = model(b_x)
-            # print(b_y)
-            pre_lab = torch.argmax(output,dim=1)
+                output = model(b_x)
+                # print(b_y)
+                pre_lab = torch.argmax(output, dim=1)
 
-            loss = criterion(output,b_y)
+                loss = criterion(output, b_y)
+                shape_reg = model.shapelet_transformer.shape_regularization(b_x)
+                div_reg = model.shapelet_transformer.diversity_regularization()
+                lambda_penalty = config['lambda_penalty']
+                penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
+                                                                                lambda_l2=lambda_penalty)
+                total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
+            else:
+                output, model_info = model(b_x)
+                pre_lab = torch.argmax(output, dim=1)
+                total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
 
-            # *** 调用新的正则化函数 ***
-            shape_reg = model.shapelet_transformer.shape_regularization(b_x)
-            div_reg = model.shapelet_transformer.diversity_regularization()
-            lambda_penalty = config['lambda_penalty']
-            penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
-                                                                            lambda_l2=lambda_penalty)
 
-            #total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
-            total_loss = loss
             optimizer.zero_grad()
 
             total_loss.backward()
-            #loss.backward()
+
 
             #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
@@ -131,16 +136,23 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             #打开验证模式
             model.eval()
 
-            output = model(b_x)
-            pre_lab = torch.argmax(output, dim=1)
-            loss = criterion(output, b_y)
+            if config['model'] == 'ShapeletModel':
 
-            shape_reg = model.shapelet_transformer.shape_regularization(b_x)
-            div_reg = model.shapelet_transformer.diversity_regularization()
-            lambda_penalty = config['lambda_penalty']
-            penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
-                                                                            lambda_l2=lambda_penalty)
-            total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
+                output = model(b_x)
+                # print(b_y)
+                pre_lab = torch.argmax(output, dim=1)
+
+                loss = criterion(output, b_y)
+                shape_reg = model.shapelet_transformer.shape_regularization(b_x)
+                div_reg = model.shapelet_transformer.diversity_regularization()
+                lambda_penalty = config['lambda_penalty']
+                penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
+                                                                                lambda_l2=lambda_penalty)
+                total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
+            else:
+                output, model_info = model(b_x)
+                pre_lab = torch.argmax(output, dim=1)
+                total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
 
             # 对损失函数进行累加
             val_loss += total_loss.item() * b_x.size(0)
@@ -175,7 +187,7 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             print("更新模型：",best_acc," --> ", val_acc_list[-1])
             best_acc = val_acc_list[-1]
             best_model_wts = copy.deepcopy(model.state_dict())
-
+    print("val acc: ",best_acc)
     torch.save(best_model_wts,'./best_model.pth')
 
 
@@ -242,8 +254,8 @@ if __name__ == "__main__":
         x_val = torch.tensor(x_val, dtype=torch.float32)
         y_val = torch.tensor(y_val, dtype=torch.long)
 
-        in_channels = len((x_train[0]))
-        seq_length = len(x_train[0][0])
+        seq_length = x_train.shape[2]  # 获取序列长度维度 (30)
+        in_channels = x_train.shape[1]  # 获取通道数维度 (72)
         num_classes = 2
 
 
@@ -258,14 +270,17 @@ if __name__ == "__main__":
 
 
     # 创建模型
-    # <<< MODIFIED: Instantiating the new LocalShapeletModel >>>
-    model = LocalShapeletModel(
-        in_channels=in_channels,
-        seq_length=seq_length,
-        num_shapelets=out_channels,
-        shapelet_length=shapelet_length,
-        num_classes=num_classes
-    )
+    if config['model'] == 'ShapeletModel':
+        model = LocalShapeletModel(
+            in_channels=in_channels,
+            seq_length=seq_length,
+            num_shapelets=out_channels,
+            shapelet_length=shapelet_length,
+            num_classes=num_classes
+        )
+    else:
+        model = InterpGN(in_channels=in_channels,
+            seq_length=seq_length,)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"总可训练参数量: {total_params:,}")
