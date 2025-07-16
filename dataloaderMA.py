@@ -4,97 +4,176 @@ import numpy as np
 import scipy.io as scio
 import os
 
-
-def UFFT_subject_data(data_path, subject=1, sec=8, win_start=27, win_length=40, win_stride=13):
+def UFFT_subject_data(data_path, subject=1):
     """
-    load subject data from the UFFT dataset.
+    从 UFFT 数据集中加载指定被试的完整试次（trial）数据，不进行滑窗切分。
 
     Args:
-        data_path: Path of the UFFT dataset.
-        subject:  Index of subject.
-        sec: Number of split signals. A 10-s task period can be divided into 8 segments when sliding window size = 3 s and step size = 1 s.
-        win_start: Starting position of data segmentation.
-        win_length: Sliding window size, 40 = 13.3 Hz * 3 s.
-        win_stride: Step size of sliding window, 13 = 13.3 Hz * 1 s.
+        data_path (str): UFFT 数据集的根目录路径。
+        subject (int): 要加载的被试编号。
 
+    Returns:
+        tuple: 包含两个 NumPy 数组的元组 (data, label)
+        - data (np.ndarray): 形状为 (样本数, 通道数, 时间点数) 的数据数组。
+          样本数 = sheet的数量, 通道数 = sheet的列数, 时间点数 = sheet的行数。
+        - label (np.ndarray): 形状为 (样本数,) 的标签数组。
     """
-    data = []
-    label = []
-    END = win_start + (sec-1) * win_stride
+    # 构建数据和标签文件的路径
+    data_file = f'{data_path}/{subject}/{subject}.xls'
+    desc_file = f'{data_path}/{subject}/{subject}_desc.xls'
 
-    for num in range(subject, subject+1):
-        name = data_path + '/' + str(num) + '/' + str(num) + '.xls'
-        Hb_org = pd.read_excel(name, header=None, sheet_name=None)
-        name = data_path + '/' + str(num) + '/' + str(num) + '_desc.xls'
+    # --- 数据加载 ---
+    # 使用 pandas 一次性读取所有 sheet，返回一个字典 {sheet_name: DataFrame}
+    # sheet_name=None 是关键，header=None 表示没有表头
+    all_sheets_dict = pd.read_excel(data_file, header=None, sheet_name=None)
+
+    # 将所有 sheet 的数据 (DataFrame) 转换为 NumPy 数组，并放入一个列表中
+    # all_sheets_dict.values() 会返回所有 DataFrame
+    # 假设每个 sheet 的形状是 (时间点数, 通道数)
+    all_trials_list = [sheet.values for sheet in all_sheets_dict.values()]
+
+    # 将列表转换为一个3D NumPy数组
+    # 此时的形状是 (样本数, 时间点数, 通道数)
+    data = np.array(all_trials_list)
+
+    # 进行维度转置，以满足 (样本数, 通道数, 时间点数) 的要求
+    # 交换第1和第2个维度（从0开始计数）
+    data = data.transpose((0, 2, 1))
+
+    # --- 标签加载 ---
+    # 读取描述文件
+    desc_df = pd.read_excel(desc_file, header=None)
+
+    # 提取第一列作为标签，并减1（通常标签从1开始，模型需要从0开始）
+    # .values 将 DataFrame 转换为 NumPy 数组，[:, 0] 选择第一列
+    label = desc_df.values[:, 0] - 1
+
+    print(f'被试 {subject} 的数据加载完成。')
+    # print(f'Data shape: {data.shape}')
+    # print(f'Label shape: {label.shape}')
+
+    return data, label
+
+
+# def MA_subject_data(path, sub):
+#     """
+#     load MA data.
+#
+#     Args:
+#         path: Data path of the MA dataset.
+#         sub: Index of subject.
+#     """
+#     data = []
+#     label = []
+#
+#     # read label
+#     file_path = os.path.join(path, str(sub), str(sub)+'_desc.mat')
+#     signal_label = np.array(scio.loadmat(file_path)['label']).squeeze()
+#     for k in range(len(signal_label)):
+#         if signal_label[k] == 1:
+#             signal_label[k] = 0
+#         elif signal_label[k] == 2:
+#             signal_label[k] = 1
+#
+#     # read data (60, 72, 30); (9, 19) -> [-2, 10]s
+#     for wins in range(9, 19):
+#         file_path = os.path.join(path, str(sub), str(wins) + '_oxy.mat')
+#         oxy = np.array(scio.loadmat(file_path)['signal']).transpose((2, 1, 0))[:, :, :30]
+#         file_path = os.path.join(path, str(sub), str(wins) + '_deoxy.mat')
+#         deoxy = np.array(scio.loadmat(file_path)['signal']).transpose((2, 1, 0))[:, :, :30]
+#         # (60, 72, 30)
+#         hb = np.concatenate((oxy, deoxy), axis=1)
+#
+#         data.append(hb)
+#         label.append(signal_label)
+#
+#     print(str(sub) + '  OK')
+#     data = np.array(data).transpose((1, 0, 2, 3))
+#     label = np.array(label).transpose((1, 0))
+#     # print(data.shape)
+#     # print(label.shape)
+#     return data, label
+
+def MA_subject_data(data_path, start=100, end=300):
+    """
+    Load Dataset B
+
+    Args:
+        data_path (str): dataset path.
+        start (int): start sampling point, default=100.
+        end (int): end sampling point, default=300.
+
+    Returns:
+        feature : fNIRS signal data with shape (num_samples, 72, time_points).
+        label : fNIRS labels.
+    """
+    feature = []
+    label = []
+    for sub in range(1, 30):
+        # ... (代码前面部分保持不变) ...
+        name = data_path + '/' + str(sub) + '/' + str(sub) + '_oxy.xls'
+        oxy = pd.read_excel(name, header=None, sheet_name=None)
+        name = data_path + '/' + str(sub) + '/' + str(sub) + '_deoxy.xls'
+        deoxy = pd.read_excel(name, header=None, sheet_name=None)
+        name = data_path + '/' + str(sub) + '/' + str(sub) + '_desc.xls'
         desc = pd.read_excel(name, header=None)
 
-        Hb = []
-        for i in range(1, 76):
+        HbO = []
+        HbR = []
+        for i in range(1, 61):
             name = 'Sheet' + str(i)
-            Hb.append(Hb_org[name].values)
+            HbO.append(oxy[name].values)
+            HbR.append(deoxy[name].values)
 
-        Hb = np.array(Hb).transpose((0, 2, 1))
+        HbO = np.array(HbO).transpose((0, 2, 1))
+        HbR = np.array(HbR).transpose((0, 2, 1))
         desc = np.array(desc)
 
-        for i in range(75):
-            win_data = []
-            win_label = []
-            start = win_start
-            while(start <= END):
-                win_data.append(Hb[i, :, start:start+win_length])
-                win_label.append(desc[i][0]-1)
-                start = start + win_stride
+        HbO_MA = []
+        HbO_BL = []
+        HbR_MA = []
+        HbR_BL = []
+        for i in range(60):
+            if desc[i, 0] == 1:
+                HbO_MA.append(HbO[i, :, start:end])
+                HbR_MA.append(HbR[i, :, start:end])
+            elif desc[i, 0] == 2:
+                HbO_BL.append(HbO[i, :, start:end])
+                HbR_BL.append(HbR[i, :, start:end])
 
-            data.append(win_data)
-            label.append(win_label)
+        HbO_MA = np.array(HbO_MA).reshape((30, 1, 36, end-start))
+        HbO_BL = np.array(HbO_BL).reshape((30, 1, 36, end-start))
+        HbR_MA = np.array(HbR_MA).reshape((30, 1, 36, end-start))
+        HbR_BL = np.array(HbR_BL).reshape((30, 1, 36, end-start))
 
-        print(str(num) + '  OK')
+        HbO_MA = np.concatenate((HbO_MA, HbR_MA), axis=1)
+        HbO_BL = np.concatenate((HbO_BL, HbR_BL), axis=1)
 
-    data = np.array(data)
+        for i in range(30):
+            feature.append(HbO_MA[i, :, :, :])
+            feature.append(HbO_BL[i, :, :, :])
+            label.append(0)
+            label.append(1)
+
+        print(str(sub) + '  OK')
+
+    feature = np.array(feature)
     label = np.array(label)
-    # print(data.shape)
-    # print(label.shape)
-    return data, label
 
+    # --- 新增的修改 ---
+    # 原始形状: (1740, 2, 36, 200)
+    # 目标形状: (1740, 72, 200)
+    # 使用 -1 可以让numpy自动计算第一个维度的大小
+    num_samples = feature.shape[0]
+    num_time_points = feature.shape[3]
+    feature = feature.reshape(num_samples, 2 * 36, num_time_points)
+    # 更简洁的写法: feature = feature.reshape(-1, 72, end-start)
+    # --- 修改结束 ---
 
-def MA_subject_data(path, sub):
-    """
-    load MA data.
+    print('feature ', feature.shape)
+    print('label ', label.shape)
 
-    Args:
-        path: Data path of the MA dataset.
-        sub: Index of subject.
-    """
-    data = []
-    label = []
-
-    # read label
-    file_path = os.path.join(path, str(sub), str(sub)+'_desc.mat')
-    signal_label = np.array(scio.loadmat(file_path)['label']).squeeze()
-    for k in range(len(signal_label)):
-        if signal_label[k] == 1:
-            signal_label[k] = 0
-        elif signal_label[k] == 2:
-            signal_label[k] = 1
-
-    # read data (60, 72, 30); (9, 19) -> [-2, 10]s
-    for wins in range(9, 19):
-        file_path = os.path.join(path, str(sub), str(wins) + '_oxy.mat')
-        oxy = np.array(scio.loadmat(file_path)['signal']).transpose((2, 1, 0))[:, :, :30]
-        file_path = os.path.join(path, str(sub), str(wins) + '_deoxy.mat')
-        deoxy = np.array(scio.loadmat(file_path)['signal']).transpose((2, 1, 0))[:, :, :30]
-        # (60, 72, 30)
-        hb = np.concatenate((oxy, deoxy), axis=1)
-
-        data.append(hb)
-        label.append(signal_label)
-
-    print(str(sub) + '  OK')
-    data = np.array(data).transpose((1, 0, 2, 3))
-    label = np.array(label).transpose((1, 0))
-    # print(data.shape)
-    # print(label.shape)
-    return data, label
+    return feature, label
 
 
 def KFold_train_test_set(sub_data, label, data_index, test_index, n_fold):
@@ -103,13 +182,6 @@ def KFold_train_test_set(sub_data, label, data_index, test_index, n_fold):
     y_train = label[train_index]
     X_test = sub_data[test_index[n_fold]]
     y_test = label[test_index[n_fold]]
-
-    T, W, C, S = X_train.shape
-    X_train = X_train.reshape((T * W, 1, C, S))
-    y_train = y_train.reshape((T * W))
-    T, W, C, S = X_test.shape
-    X_test = X_test.reshape((T * W, 1, C, S))
-    y_test = y_test.reshape((T * W))
 
     return X_train, y_train, X_test, y_test
 

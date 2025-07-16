@@ -41,7 +41,7 @@ class Shapelet(nn.Module):
         self.length = shapelet_len
         self.n = num_shapelet
         self.stride = stride
-
+        torch.manual_seed(42)
         # shapelet的shape：(num_shapelet, c, l)
         self.weights = nn.Parameter(torch.normal(0, 1, (self.n, self.dim, self.length)), requires_grad=True)
         self.eps = eps
@@ -73,19 +73,16 @@ class Shapelet(nn.Module):
         p = torch.exp(-torch.pow(self.eps * d, 2))  # RBF
 
         # 直通估计 (Straight-through estimator)
-        """
-        p.argmax(dim=1, keepdim=True):沿着m维度计算最大值索引。
-        torch.zeros_like(p)：创建一个与 p 形状相同的全零张量，形状为(b,m,n,c)
-        scatter_(1, p.argmax(dim=1, keepdim=True), 1.)：在全零张量的 dim=1 维度上，根据 argmax 返回的索引，将对应位置的值设为 1。
-        这会生成一个 one-hot 编码的张量 hard，其中每个样本的预测类别位置为 1，其余为 0
-        最后一个1.表示要填充的值
-        """
+        #这三句代码的作用放在了Straight-Through Estimator(STE).txt文件中进行说明
+
         """hard: (b, m, n, c)"""
         hard = torch.zeros_like(p).scatter_(1, p.argmax(dim=1, keepdim=True), 1.)
         """soft: (b, m, n, c)"""
         soft = torch.softmax(p, dim=1)
         """onehot_max：(b, m, n, c)"""
         onehot_max = hard + soft - soft.detach()
+
+
 
         """max_p:(b,n,c) """
         max_p = torch.sum(onehot_max * p, dim=1)
@@ -109,11 +106,11 @@ class ShapeBottleneckModel(nn.Module):
     - DistThresholdSBM 和 SelfAttention 等相关模块已被移除。
     """
 
-    def __init__(self,in_channels,seq_length,num_shapelet=[5, 5, 5, 5],shapelet_len=[0.1, 0.2, 0.3, 0.5]):
+    def __init__(self,in_channels,seq_length,num_classes,num_shapelet=[5, 5, 5, 5],shapelet_len=[0.1, 0.2, 0.3, 0.5]):
         super().__init__()
 
         self.num_channel = in_channels
-        self.num_class = 2
+        self.num_class = num_classes
         self.shapelet_len = []
         self.seq_length = seq_length
 
@@ -220,6 +217,7 @@ class InterpGN(nn.Module):
             self,
             in_channels,
             seq_length,
+            num_classes,
             num_shapelet=[5, 5, 5, 5],
             shapelet_len=[0.1, 0.2, 0.3, 0.5],
 
@@ -228,6 +226,7 @@ class InterpGN(nn.Module):
         self.sbm = ShapeBottleneckModel(
             num_shapelet= num_shapelet,
             shapelet_len= shapelet_len,
+            num_classes=num_classes,
             in_channels = in_channels,
             seq_length = seq_length
         )

@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from model import LocalShapeletModel  # <<< MODIFIED: Changed model import
-from dataloaderMA import KFold_train_test_set, MA_subject_data
+from dataloaderMA import KFold_train_test_set, MA_subject_data, UFFT_subject_data
 from InterpGN import InterpGN
 
 
@@ -20,12 +20,15 @@ from InterpGN import InterpGN
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=1, type=int)
+parser.add_argument('--fold_num', default=3, type=int)
 
 #VFT任务
-parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/MA_fNIRS_data')
+parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+#UFFT任务
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
+
 parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')
 parser.add_argument('--batch_size', default=32, type=int)
@@ -227,26 +230,34 @@ if __name__ == "__main__":
         print("val_size: ", data['X_val'].shape)
         print("test_size: ", data['X_test'].shape)
         x_train = torch.tensor(data['X_train'], dtype=torch.float32)
-        y_train_np = data['y_train']  # 获取numpy格式的y_train用于可视化
         y_train = torch.tensor(data['y_train'], dtype=torch.long)
         x_val = torch.tensor(data['X_val'], dtype=torch.float32)
         y_val = torch.tensor(data['y_val'], dtype=torch.long)
         x_test = torch.tensor(data['X_test'], dtype=torch.float32)
         y_test = torch.tensor(data['y_test'], dtype=torch.long)
 
+        x_train = torch.cat([x_train, x_val], dim=0)
+        y_train = torch.cat([y_train, y_val], dim=0)
+
+        # 3. 将 test 修改为新的验证集
+        x_val = x_test
+        y_val = y_test
+
         in_channels = len(data['X_train'][0])
         seq_length = data['max_len']
         num_classes = np.max(data['y_train']) + 1
+        print("使用数据集：", config['problem'])
+        print("train.shape: ", x_train.shape)
+        print("val.shape: ", x_val.shape)
+        print("test.shape: ", x_test.shape)
 
-    else:
+    elif config['data_path'] == '../fNIRSNet-main/fNIRSNet-main/predata':
         data_path = config['data_path']
-        sub_data, label = MA_subject_data(path=data_path, sub=29)
-        data_index = np.arange(60)
-        test_index = [np.arange(12), np.arange(12, 24), np.arange(24, 36), np.arange(36, 48), np.arange(48, 60)]
+        sub_data, label = MA_subject_data(data_path)
+        data_index = np.arange(1740)
+        test_index = [np.arange(348), np.arange(348, 696), np.arange(696, 1044), np.arange(1044, 1392), np.arange(1392, 1740)]
         n_fold = config['fold_num']
         x_train, y_train, x_val, y_val = KFold_train_test_set(sub_data, label, data_index, test_index, n_fold)
-        x_train = np.squeeze(x_train, axis=1)
-        x_val = np.squeeze(x_val, axis=1)
 
         x_train = torch.tensor(x_train, dtype=torch.float32)
         y_train = torch.tensor(y_train, dtype=torch.long)
@@ -258,6 +269,48 @@ if __name__ == "__main__":
         in_channels = x_train.shape[1]  # 获取通道数维度 (72)
         num_classes = 2
 
+        print("使用数据集：MA")
+        print("train.shape: ", x_train.shape)
+        print("val.shape: ", x_val.shape)
+    else:
+        data_path = config['data_path']
+        """
+        加载从 1 到 num_subjects 的所有被试数据并合并。
+        """
+        all_data_list = []
+        all_labels_list = []
+
+        # 循环加载每个被试的数据
+        for subject_id in range(1, 31):
+            subject_data, subject_labels = UFFT_subject_data(data_path, subject=subject_id)
+            all_data_list.append(subject_data)
+            all_labels_list.append(subject_labels)
+
+        # 将所有被试的数据和标签合并成一个大数组
+        all_data = np.concatenate(all_data_list, axis=0)
+        all_labels = np.concatenate(all_labels_list, axis=0)
+
+        all_data = all_data[:, :, 20:276]
+
+        data_index = np.arange(2250)
+        test_index = [np.arange(450), np.arange(450, 900), np.arange(900, 1350), np.arange(1350, 1800), np.arange(1800, 2250)]
+
+        n_fold = config['fold_num']
+        x_train, y_train, x_val, y_val = KFold_train_test_set(all_data, all_labels, data_index, test_index, n_fold)
+
+        x_train = torch.tensor(x_train, dtype=torch.float32)
+        y_train = torch.tensor(y_train, dtype=torch.long)
+
+        x_val = torch.tensor(x_val, dtype=torch.float32)
+        y_val = torch.tensor(y_val, dtype=torch.long)
+
+        seq_length = x_train.shape[2]  # 获取序列长度维度
+        in_channels = x_train.shape[1]  # 获取通道数维度
+        num_classes = 3
+
+        print("使用数据集：UFFT")
+        print("train.shape: ", x_train.shape)
+        print("val.shape: ", x_val.shape)
 
     # 输入参数
 
@@ -280,10 +333,12 @@ if __name__ == "__main__":
         )
     else:
         model = InterpGN(in_channels=in_channels,
-            seq_length=seq_length,)
+            seq_length=seq_length,num_classes=num_classes)
+
+    print("使用模型：", config['model'])
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"总可训练参数量: {total_params:,}")
+    print(f"模型总可训练参数量: {total_params:,}")
 
 
 
@@ -303,8 +358,3 @@ if __name__ == "__main__":
     # 训练模型
     train_model_process(model,train_loader,val_loader,config)
 
-    #训练后可视化与测试
-    logging.info("Loading best model for testing...")
-    model.load_state_dict(torch.load('best_model.pth'))
-
-    #test_model_process(model, test_loader)

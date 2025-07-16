@@ -1,0 +1,90 @@
+1. 问题一：hard = torch.zeros_like(p).scatter_(1, p.argmax(dim=1, keepdim=True), 1.)在做什么？
+p.argmax(dim=1, keepdim=True):沿着m维度计算最大值索引。
+torch.zeros_like(p)：创建一个与 p 形状相同的全零张量，形状为(b,m,n,c)
+scatter_(1, p.argmax(dim=1, keepdim=True), 1.)：在全零张量的 dim=1 维度上，根据 argmax 返回的索引，将对应位置的值设为 1。
+这会生成一个 one-hot 编码的张量 hard，其中每个样本的预测类别位置为 1，其余为 0
+最后一个1.表示scatter要填充的值
+这里dim=1的维度表示的就是所有的子序列
+
+举一个例子
+假设b=1，m=4，n=3，c=2 即批次数=1、子序列数=4，一个通道上的shapelets个数=3，通道数=2
+                                                                假设：index = p.argmax(dim=1, keepdim=True)
+p = torch.tensor([[[[0.8, 0.1],  # m=0, n=0, c=0,1              index = tensor([[[[2, 3],     # 对应 (n=0, c=0) 和 (n=0, c=1) 的最大值索引
+                    [0.5, 0.2],  # m=0, n=1, c=0,1                                [1, 3],     # 对应 (n=1, c=0) 和 (n=1, c=1) 的最大值索引
+                    [0.3, 0.9]], # m=0, n=2, c=0,1                                [3, 0]]]])  # 对应 (n=2, c=0) 和 (n=2, c=1) 的最大值索引
+
+                    [[0.2, 0.3],  # m=1, n=0, c=0,1
+                    [0.9, 0.4],   # m=1, n=1, c=0,1
+                    [0.1, 0.8]], # m=1, n=2, c=0,1
+
+                   [[0.9, 0.5],  # m=2, n=0, c=0,1
+                    [0.6, 0.6],  # m=2, n=1, c=0,1
+                    [0.2, 0.7]], # m=2, n=2, c=0,1
+
+                   [[0.3, 0.6],  # m=3, n=0, c=0,1
+                    [0.4, 0.8],  # m=3, n=1, c=0,1
+                    [0.7, 0.2]]]])# m=3, n=2, c=0,1
+
+# 假设torch.zeros_like(p)生成的张量叫做zeros_tensor，则zeros_tensor=
+  tensor([[[[0., 0.],
+           [0., 0.],
+           [0., 0.]],
+
+          [[0., 0.],
+           [0., 0.],
+           [0., 0.]],
+
+          [[0., 0.],
+           [0., 0.],
+           [0., 0.]],
+
+          [[0., 0.],
+           [0., 0.],
+           [0., 0.]]]])
+现在我们看index，index[0, 0, 0, 0]=2，所以沿着 dim=1 (m 维度)，在索引为 2 的位置写入 1.，即zeros_tensor[0,2,0,0]=1
+同理index[0, 0, 0, 1]=3,即zeros_tensor[0,3,0,1]=1   [0, 0, 1, 0]=1，即zeros_tensor[0,1,1,0]=1，以此类推，最终得到hard
+# hard 的内容:
+  tensor([[[[0., 0.],  # m=0
+           [0., 0.],
+           [0., 1.]], # <-- (n=2, c=1) 的最佳匹配在 m=0 (p值为0.9)
+
+          [[0., 0.],  # m=1
+           [1., 0.], # <-- (n=1, c=0) 的最佳匹配在 m=1 (p值为0.9)
+           [0., 0.]],
+
+          [[1., 0.],  # m=2
+           [0., 0.], # <-- (n=0, c=0) 的最佳匹配在 m=2 (p值为0.9)
+           [0., 0.]],
+
+          [[0., 1.],  # m=3
+           [0., 1.], # <-- (n=0, c=1) 和 (n=1, c=1) 的最佳匹配都在 m=3
+           [1., 0.]]]])# <-- (n=2, c=0) 的最佳匹配在 m=3
+一共六个1，就代表n*c=6个shapelet所代表的最大p的值的维度在哪里
+
+
+2. 问题二：onehot_max = hard + soft - soft.detach()  为什么要先加soft，再减soft，这样不就等价于onehot_max = hard吗？
+这行代码是实现**直通估计器（Straight-Through Estimator, STE）**的一种经典技巧。它的目的是在神经网络中处理一个棘手的问题：如何在反向传播中为不可微的操作（如 argmax）计算梯度。
+让我们一步步来分析。
+核心问题：
+在前向传播中，我们希望使用 hard 的值。hard 是一个 one-hot 编码，它做出了一个明确的、离散的选择（"第 k 个子序列是最佳匹配"）。这通常能让模型学到更清晰的特征。
+在反向传播中，hard 是通过 argmax 得到的，而 argmax 函数是不可微分的。它的梯度在几乎所有地方都是0，在少数点上是未定义的。如果梯度为0，那么损失无法传播回 p，进而也无法更新 shapelet 的权重。模型就学不到任何东西。
+STE 的思想是：“前向用硬值，反向用软值”。
+前向传播 (Forward Pass)：我们计算出的结果应该等于 hard。
+反向传播 (Backward Pass)：我们希望梯度能像 soft 那样平滑地流动，因为 soft (来自 softmax) 是可微的。
+
+前向传播分析：为什么结果是 hard？
+在前向传播中，我们只关心计算出的数值。
+onehot_max = hard + (soft - soft.detach())
+因为 soft 和 soft.detach() 的值完全一样，所以 (soft - soft.detach()) 的结果是一个全零的张量。
+因此：onehot_max = hard + 0 = hard
+结论：在前向传播中，onehot_max 的值就是我们想要的离散 one-hot 张量 hard。
+
+反向传播分析：
+在反向传播中，PyTorch 的自动求导机制 (Autograd) 会计算损失 L 对 onehot_max 中每个元素的偏导数，然后将这个梯度继续向后传播。
+我们来看看梯度如何通过 onehot_max = hard + soft - soft.detach() 这条式子：
+当计算对 soft 的梯度时，Autograd 会分别计算对每一项的梯度：
+grad(hard): hard 是通过 argmax 得到的，它与 soft 之间没有可微分的路径。所以，从 hard 回传到 soft 的梯度是 0。
+grad(soft): soft 本身就是我们关心的变量，它的梯度是 1 (或者说，梯度会原封不动地通过)。
+grad(soft.detach()): 因为我们使用了 .detach()，PyTorch 把它当作一个常量。常量对任何变量的导数都是 0。
+所以，onehot_max 接收到的梯度 grad_out 在回传时，只有 + soft 这一项有贡献。梯度被完整地传递给了 soft。
+结论：在反向传播中，梯度会完全绕过 hard 和 soft.detach()，直接从 onehot_max 流向 soft。就好像 onehot_max 是由 soft 直接生成的一样。
