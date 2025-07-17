@@ -94,23 +94,25 @@ def UFFT_subject_data(data_path, subject=1):
 #     # print(label.shape)
 #     return data, label
 
-def MA_subject_data(data_path, start=100, end=300):
+import pandas as pd
+import numpy as np
+
+
+def MA_subject_data(data_path):
     """
-    Load Dataset B
+    加载数据集 B，并保留每个时间序列的原始完整长度。
 
     Args:
-        data_path (str): dataset path.
-        start (int): start sampling point, default=100.
-        end (int): end sampling point, default=300.
+        data_path (str): 数据集路径。
 
     Returns:
-        feature : fNIRS signal data with shape (num_samples, 72, time_points).
-        label : fNIRS labels.
+        feature : fNIRS 信号数据，形状为 (num_samples, 72, time_points)。
+        label : fNIRS 标签。
     """
     feature = []
     label = []
     for sub in range(1, 30):
-        # ... (代码前面部分保持不变) ...
+        # --- 代码前面部分保持不变 ---
         name = data_path + '/' + str(sub) + '/' + str(sub) + '_oxy.xls'
         oxy = pd.read_excel(name, header=None, sheet_name=None)
         name = data_path + '/' + str(sub) + '/' + str(sub) + '_deoxy.xls'
@@ -129,22 +131,29 @@ def MA_subject_data(data_path, start=100, end=300):
         HbR = np.array(HbR).transpose((0, 2, 1))
         desc = np.array(desc)
 
+        # --- 修改开始 ---
+        # 动态获取时间点的数量 (原始长度)
+        time_points = HbO.shape[2]
+
         HbO_MA = []
         HbO_BL = []
         HbR_MA = []
         HbR_BL = []
         for i in range(60):
+            # 移除 [start:end] 切片，保留完整数据
             if desc[i, 0] == 1:
-                HbO_MA.append(HbO[i, :, start:end])
-                HbR_MA.append(HbR[i, :, start:end])
+                HbO_MA.append(HbO[i, :, :])
+                HbR_MA.append(HbR[i, :, :])
             elif desc[i, 0] == 2:
-                HbO_BL.append(HbO[i, :, start:end])
-                HbR_BL.append(HbR[i, :, start:end])
+                HbO_BL.append(HbO[i, :, :])
+                HbR_BL.append(HbR[i, :, :])
 
-        HbO_MA = np.array(HbO_MA).reshape((30, 1, 36, end-start))
-        HbO_BL = np.array(HbO_BL).reshape((30, 1, 36, end-start))
-        HbR_MA = np.array(HbR_MA).reshape((30, 1, 36, end-start))
-        HbR_BL = np.array(HbR_BL).reshape((30, 1, 36, end-start))
+        # 使用动态获取的 time_points 变量进行 reshape
+        HbO_MA = np.array(HbO_MA).reshape((30, 1, 36, time_points))
+        HbO_BL = np.array(HbO_BL).reshape((30, 1, 36, time_points))
+        HbR_MA = np.array(HbR_MA).reshape((30, 1, 36, time_points))
+        HbR_BL = np.array(HbR_BL).reshape((30, 1, 36, time_points))
+        # --- 修改结束 ---
 
         HbO_MA = np.concatenate((HbO_MA, HbR_MA), axis=1)
         HbO_BL = np.concatenate((HbO_BL, HbR_BL), axis=1)
@@ -160,15 +169,13 @@ def MA_subject_data(data_path, start=100, end=300):
     feature = np.array(feature)
     label = np.array(label)
 
-    # --- 新增的修改 ---
-    # 原始形状: (1740, 2, 36, 200)
-    # 目标形状: (1740, 72, 200)
-    # 使用 -1 可以让numpy自动计算第一个维度的大小
+    # 最后的 reshape 操作，将 (..., 2, 36, time_points) 转换为 (..., 72, time_points)
+    # 原始形状: (1740, 2, 36, 原始时间点数)
+    # 目标形状: (1740, 72, 原始时间点数)
+    # 使用 -1 可以让 numpy 自动计算维度，代码更健壮
     num_samples = feature.shape[0]
     num_time_points = feature.shape[3]
-    feature = feature.reshape(num_samples, 2 * 36, num_time_points)
-    # 更简洁的写法: feature = feature.reshape(-1, 72, end-start)
-    # --- 修改结束 ---
+    feature = feature.reshape(num_samples, -1, num_time_points)  # -1 会自动计算为 2 * 36 = 72
 
     print('feature ', feature.shape)
     print('label ', label.shape)

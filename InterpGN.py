@@ -34,7 +34,7 @@ class Shapelet(nn.Module):
     - 不再需要'distance_func'和'memory_efficient'等参数。
     """
 
-    def __init__(self, dim_data, shapelet_len, num_shapelet=10, stride=1, eps=1.):
+    def __init__(self, dim_data, shapelet_len, seq_length, num_shapelet=10, stride=1, eps=1.):
         super().__init__()
 
         self.dim = dim_data
@@ -45,7 +45,12 @@ class Shapelet(nn.Module):
         # shapelet的shape：(num_shapelet, c, l)
         self.weights = nn.Parameter(torch.normal(0, 1, (self.n, self.dim, self.length)), requires_grad=True)
         self.eps = eps
-
+        # --- 【新增】可学习的惩罚/重要性矩阵 ---
+        # 计算滑动窗口产生的子序列数量 m
+        num_subsequences = (seq_length - self.length) // self.stride + 1
+        # 创建一个可学习的参数，形状为(通道数, 子序列数)
+        # 初始化为1，表示初始状态下没有惩罚
+        self.position_channel_map = nn.Parameter(torch.ones(self.dim, num_subsequences), requires_grad=True)
     def forward(self, x):
         """
         unfold(对哪一个维度进行操作，滑动窗口长度，步长)。ShapeBottleneckModel已经x = rearrange(x, 'b t c -> b c t')，所以是对第二个维度做滑动窗口
@@ -68,6 +73,17 @@ class Shapelet(nn.Module):
         d：(b,m,n,c)
         """
         d = (x - self.weights).abs().mean(dim=-1)
+        # --- 【修改】应用惩罚矩阵 ---
+        # self.position_channel_map 的形状是 (c, m)
+        # d 的形状是 (b, m, n, c)
+        # 我们需要将 map 的形状调整为可以与 d 进行广播相乘
+        # (c, m) -> permute(1,0) -> (m, c) -> unsqueeze -> (1, m, 1, c)
+        # 这样它就可以和 (b, m, n, c) 的 d 进行广播相乘了
+        penalty_map = self.position_channel_map.permute(1, 0).unsqueeze(0).unsqueeze(2)
+
+        # 将惩罚值与距离相乘。惩罚值越小，代表此位置越重要，距离也越小
+        d = d * penalty_map
+
 
         # Maximum rbf prob，高斯核  p: (b,m,n,c)
         p = torch.exp(-torch.pow(self.eps * d, 2))  # RBF
@@ -90,6 +106,11 @@ class Shapelet(nn.Module):
         """展平操作，max_p:(b,n,c) --> max_p.flatten(start_dim=1): (b,n*c) """
         return max_p.flatten(start_dim=1), d.min(dim=1).values.flatten(start_dim=1)
 
+    # 【新增】step方法用于裁剪惩罚矩阵
+    def step(self):
+        # 裁剪惩罚矩阵，使其值非负，这保证了惩罚的直观意义
+        with torch.no_grad():
+            self.position_channel_map.clamp_(min=0.)
     def derivative(self):
         # 计算shapelet的导数（相邻点之差），可用于可视化或分析
         return torch.diff(self.weights, dim=-1)
@@ -124,6 +145,7 @@ class ShapeBottleneckModel(nn.Module):
                 Shapelet(
                     dim_data=self.num_channel,
                     shapelet_len=sl,
+                    seq_length=self.seq_length,
                     num_shapelet=num_shapelet[i],
                     eps=1.,
                     stride=1 if seq_length < 3000 else max(1, int(np.log2(sl)))

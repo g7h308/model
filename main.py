@@ -20,18 +20,18 @@ from InterpGN import InterpGN
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=3, type=int)
+parser.add_argument('--fold_num', default=0, type=int)
 
 #VFT任务
-#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
 
 parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')
-parser.add_argument('--batch_size', default=32, type=int)
+parser.add_argument('--batch_size', default=16, type=int)
 parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
@@ -290,7 +290,7 @@ if __name__ == "__main__":
         all_data = np.concatenate(all_data_list, axis=0)
         all_labels = np.concatenate(all_labels_list, axis=0)
 
-        all_data = all_data[:, :, 20:276]
+        #all_data = all_data[:, :, 20:276]
 
         data_index = np.arange(2250)
         test_index = [np.arange(450), np.arange(450, 900), np.arange(900, 1350), np.arange(1350, 1800), np.arange(1800, 2250)]
