@@ -35,14 +35,15 @@ def load(config):
         Data_npy = np.load(npy_path, allow_pickle=True)
         Data['max_len'] = Data_npy.item().get('max_len')
         Data['X_train'] = Data_npy.item().get('X_train')
-        #Data['X_train'] = Data['X_train'].transpose(0, 2, 1)
         Data['y_train'] = Data_npy.item().get('y_train')
         Data['X_val'] = Data_npy.item().get('X_val')
-        #Data['X_val'] = Data['X_val'].transpose(0, 2, 1)
         Data['y_val'] = Data_npy.item().get('y_val')
         Data['X_test'] = Data_npy.item().get('X_test')
-        #Data['X_test'] = Data['X_test'].transpose(0, 2, 1)
         Data['y_test'] = Data_npy.item().get('y_test')
+        if problem == 'PREP':
+            Data['X_train'] = Data['X_train'].transpose(0, 2, 1)
+            Data['X_val'] = Data['X_val'].transpose(0, 2, 1)
+            Data['X_test'] = Data['X_test'].transpose(0, 2, 1)
 
         logger.info(f"{len(Data['y_train'])} samples will be used for training")
         logger.info(f"{len(Data['y_val'])} samples will be used for validation")

@@ -252,7 +252,6 @@ class InterpGN(nn.Module):
             in_channels = in_channels,
             seq_length = seq_length
         )
-        # deep_model 已被移除
 
     def forward(self, x):
         """
@@ -269,7 +268,9 @@ class InterpGN(nn.Module):
         return self.sbm.loss()
 
     def step(self):
-        # step操作代理给SBM组件
+        # [修改] step操作代理给SBM组件，并确保每个shapelet的step也被调用
         self.sbm.step()
+        for shapelet_module in self.sbm.shapelets:
+            shapelet_module.step()
 
 # --- END OF COMBINED AND SIMPLIFIED FILE ---

@@ -14,6 +14,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from model import LocalShapeletModel  # <<< MODIFIED: Changed model import
 from dataloaderMA import KFold_train_test_set, MA_subject_data, UFFT_subject_data
 from InterpGN import InterpGN
+import os
+from visualize import visualize_and_save_map, get_position_channel_maps
 
 
 #配置日志记录
@@ -22,16 +24,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 parser = argparse.ArgumentParser()
 parser.add_argument('--fold_num', default=4, type=int)
 
-#VFT任务
-#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+#VFT和REST任务
+parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
 
 parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')
-parser.add_argument('--batch_size', default=16, type=int)
+parser.add_argument('--batch_size', default=4, type=int)
 parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
@@ -78,7 +80,6 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
     num_epochs = config['epochs']
     for epoch in range(num_epochs):
         print("Epoch{}/{}".format(epoch+1,num_epochs))
-        print("\n")
         train_loss = 0.0
         train_acc = 0
 
@@ -122,6 +123,7 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
             #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
+            #model.step()
 
             #对损失函数进行累加
             train_loss +=total_loss.item()*b_x.size(0)
@@ -209,7 +211,7 @@ def test_model_process(model, test_dataloader):
             test_data_y = test_data_y.to(device)
             # 设置模型为评估模式
             model.eval()
-            output= model(test_data_x)
+            output, model_info = model(test_data_x)
             pre_lab = torch.argmax(output, dim=1)
             test_corrects += torch.sum(pre_lab == test_data_y.data)
             test_num += test_data_x.size(0)
@@ -222,6 +224,13 @@ def test_model_process(model, test_dataloader):
 
 if __name__ == "__main__":
     config = args.__dict__
+    # [新增] 定义保存图像的文件夹名称
+    BEFORE_TRAINING_DIR = 'maps_before_training'
+    AFTER_TRAINING_DIR = 'maps_after_training'
+
+    # [新增] 创建目录（如果不存在）
+    os.makedirs(BEFORE_TRAINING_DIR, exist_ok=True)
+    os.makedirs(AFTER_TRAINING_DIR, exist_ok=True)
 
     if config['data_path'] ==  '../TSCModel/RankSCL/RankSCL/ADHD':
         config['data_dir'] = config['data_path'] + "/" + config['problem']
@@ -342,6 +351,17 @@ if __name__ == "__main__":
     print(f"模型总可训练参数量: {total_params:,}")
 
 
+    print("=" * 50)
+    print(f"--- Visualizing and Saving Maps BEFORE Training to ./{BEFORE_TRAINING_DIR} ---")
+    print("=" * 50)
+    initial_maps = get_position_channel_maps(model)
+    for map_data, title in initial_maps:
+        # [修改] 创建一个适合做文件名的字符串
+        filename = title.replace(' ', '_').replace('(', '').replace(')', '').replace(':', '') + '.png'
+        # [修改] 构建完整的保存路径
+        save_path = os.path.join(BEFORE_TRAINING_DIR, filename)
+        # [修改] 调用新的可视化并保存函数
+        visualize_and_save_map(map_data, f'[Before Training] {title}', save_path)
 
 
     train_dataset = TensorDataset(x_train, y_train)
@@ -359,3 +379,19 @@ if __name__ == "__main__":
     # 训练模型
     train_model_process(model,train_loader,val_loader,config)
 
+
+    print("\n" + "=" * 50)
+    print(f"--- Visualizing and Saving Maps AFTER Training to ./{AFTER_TRAINING_DIR} ---")
+    print("=" * 50)
+    model.load_state_dict(torch.load('best_model.pth'))
+    trained_maps = get_position_channel_maps(model)
+    for map_data, title in trained_maps:
+        # [修改] 创建文件名并构建保存路径
+        filename = title.replace(' ', '_').replace('(', '').replace(')', '').replace(':', '') + '.png'
+        save_path = os.path.join(AFTER_TRAINING_DIR, filename)
+        # [修改] 调用新的可视化并保存函数
+        visualize_and_save_map(map_data, f'[After Training] {title}', save_path)
+
+
+
+    #test_model_process(model, test_loader)
