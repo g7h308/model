@@ -20,12 +20,12 @@ from InterpGN import InterpGN
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=0, type=int)
+parser.add_argument('--fold_num', default=4, type=int)
 
 #VFT任务
-parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
 
@@ -54,7 +54,7 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
 
     # 定义学习率调度器 ---
     # 监控 'val_loss'，如果连续 5 个 epoch 验证损失没有下降，则学习率乘以 0.2
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.2, patience=5, verbose=True)
+    #scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.2, patience=5, verbose=True)
 
     #损失函数
     criterion = nn.CrossEntropyLoss()
@@ -254,6 +254,7 @@ if __name__ == "__main__":
     elif config['data_path'] == '../fNIRSNet-main/fNIRSNet-main/predata':
         data_path = config['data_path']
         sub_data, label = MA_subject_data(data_path)
+        #sub_data = sub_data[:, :, 100:300]
         data_index = np.arange(1740)
         test_index = [np.arange(348), np.arange(348, 696), np.arange(696, 1044), np.arange(1044, 1392), np.arange(1392, 1740)]
         n_fold = config['fold_num']
