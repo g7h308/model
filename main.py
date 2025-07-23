@@ -16,13 +16,14 @@ from dataloaderMA import KFold_train_test_set, MA_subject_data, UFFT_subject_dat
 from InterpGN import InterpGN
 import os
 from visualize import visualize_and_save_map, get_position_channel_maps
+from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 
 
 #配置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=4, type=int)
+parser.add_argument('--fold_num', default=0, type=int)
 
 #VFT和REST任务
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
@@ -68,40 +69,37 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
     best_model_wts = copy.deepcopy(model.state_dict())
 
     #最高精度，初始设为0.0
-    best_acc = 0.0
+    best_acc , best_precision, best_recall , best_f1, best_kappa= 0.0, 0.0, 0.0, 0.0, 0.0
+
 
     #训练、验证损失列表，保存每一次训练和验证的loss值
     train_loss_list , val_loss_list = [],[]
     #训练、验证精度列表，保存每一次训练和验证的精度
     train_acc_list, val_acc_list = [], []
+    #其他指标在val中都要展示
+    val_precision_list, val_recall_list, val_f1_list, val_kappa_list = [], [], [], []
 
     #记录当前时间，用于计算每一轮的消耗的时间
-    since=time.time()
+
+    since = time.time()
     num_epochs = config['epochs']
     for epoch in range(num_epochs):
-        print("Epoch{}/{}".format(epoch+1,num_epochs))
+        print("Epoch{}/{}".format(epoch + 1, num_epochs))
+
+        # 初始化训练相关的统计变量
         train_loss = 0.0
         train_acc = 0
-
-
-        val_loss = 0.0
-        val_acc = 0
-
-        #训练集和验证集的样本数量
         train_num = 0
-        val_num = 0
+
         # 打开训练模式
         model.train()
-        #训练
-        for step,(b_x,b_y) in enumerate(train_dataloader):
+        # 训练
+        for step, (b_x, b_y) in enumerate(train_dataloader):
             b_x = b_x.to(device)
             b_y = b_y.to(device)
             if config['model'] == 'ShapeletModel':
-
                 output = model(b_x)
-                # print(b_y)
                 pre_lab = torch.argmax(output, dim=1)
-
                 loss = criterion(output, b_y)
                 shape_reg = model.shapelet_transformer.shape_regularization(b_x)
                 div_reg = model.shapelet_transformer.diversity_regularization()
@@ -113,88 +111,110 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
                 output, model_info = model(b_x)
                 pre_lab = torch.argmax(output, dim=1)
                 total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
-
 
             optimizer.zero_grad()
-
             total_loss.backward()
-
-
-            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
             optimizer.step()
-            #model.step()
 
-            #对损失函数进行累加
-            train_loss +=total_loss.item()*b_x.size(0)
-            #train_loss += loss.item() * b_x.size(0)
-            #对精确度累加
+            train_loss += total_loss.item() * b_x.size(0)
             train_acc += torch.sum(pre_lab == b_y.data)
-            #当前已经被用于训练的样本数量累加
             train_num += b_x.size(0)
 
-        #验证
-        for step,(b_x,b_y) in enumerate(val_dataloader):
-            b_x = b_x.to(device)
-            b_y = b_y.to(device)
-
-            #打开验证模式
-            model.eval()
-
-            if config['model'] == 'ShapeletModel':
-
-                output = model(b_x)
-                # print(b_y)
-                pre_lab = torch.argmax(output, dim=1)
-
-                loss = criterion(output, b_y)
-                shape_reg = model.shapelet_transformer.shape_regularization(b_x)
-                div_reg = model.shapelet_transformer.diversity_regularization()
-                lambda_penalty = config['lambda_penalty']
-                penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
-                                                                                lambda_l2=lambda_penalty)
-                total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
-            else:
-                output, model_info = model(b_x)
-                pre_lab = torch.argmax(output, dim=1)
-                total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
-
-            # 对损失函数进行累加
-            val_loss += total_loss.item() * b_x.size(0)
-            #val_loss += loss.item() * b_x.size(0)
-            # 对精确度累加
-            val_acc += torch.sum(pre_lab == b_y.data)
-            # 当前已经被用于训练的样本数量累加
-            val_num += b_x.size(0)
-
-
+        # 保存当前epoch的训练损失和精度
         train_loss_list.append(train_loss / train_num)
         train_acc_list.append(train_acc.double().item() / train_num)
 
-        # 计算当前epoch的平均验证损失
-        epoch_val_loss = val_loss / val_num
+        # ------------------- 验证阶段 -------------------
 
+        # 初始化验证相关的统计变量
+        val_loss = 0.0
+        val_acc = 0
+        val_num = 0
+
+        # --- 新增: 创建空列表，用于收集当前epoch验证集的所有预测和真实标签 ---
+        # 确保每个epoch都从一个空的列表开始收集
+        y_true = []
+        y_pred = []
+
+        # 打开验证模式
+        model.eval()
+
+        # 验证
+        with torch.no_grad():
+            for step, (b_x, b_y) in enumerate(val_dataloader):
+                b_x = b_x.to(device)
+                b_y = b_y.to(device)
+
+                if config['model'] == 'ShapeletModel':
+                    output = model(b_x)
+                    pre_lab = torch.argmax(output, dim=1)
+                    loss = criterion(output, b_y)
+                    shape_reg = model.shapelet_transformer.shape_regularization(b_x)
+                    div_reg = model.shapelet_transformer.diversity_regularization()
+                    lambda_penalty = config['lambda_penalty']
+                    penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
+                                                                                    lambda_l2=lambda_penalty)
+                    total_loss = loss + config['lambda_shape'] * shape_reg + config[
+                        'lambda_div'] * div_reg + penalty_reg
+                else:
+                    output, model_info = model(b_x)
+                    pre_lab = torch.argmax(output, dim=1)
+                    total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
+
+                val_loss += total_loss.item() * b_x.size(0)
+                val_acc += torch.sum(pre_lab == b_y.data)
+                val_num += b_x.size(0)
+
+                # --- 新增: 收集预测标签和真实标签 ---
+                y_pred.extend(pre_lab.cpu().numpy())
+                y_true.extend(b_y.cpu().numpy())
+
+        # 保存当前epoch的验证损失和精度
         val_loss_list.append(val_loss / val_num)
         val_acc_list.append(val_acc.double().item() / val_num)
 
-        print("第{}轮  trainloss：{:.4f}  train acc：{:.4f}".format(epoch+1,train_loss_list[-1],train_acc_list[-1]))
-        print("第{}轮  valloss：  {:.4f}  val acc：  {:.4f}".format(epoch+1,val_loss_list[-1],val_acc_list[-1]))
+        # --- 新增: 在验证循环结束后，计算Precision, Recall, F1, Kappa ---
+        # 使用 'macro' 平均，平等对待每个类别。zero_division=0 避免除以零的警告
+        precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='macro', zero_division=0)
+        kappa = cohen_kappa_score(y_true, y_pred)
 
-        # 在每个 epoch 结束后，用验证损失来更新学习率 ---
-        #scheduler.step(epoch_val_loss)
+        # 保存这些新指标
+        val_precision_list.append(precision)
+        val_recall_list.append(recall)
+        val_f1_list.append(f1)
+        val_kappa_list.append(kappa)
 
-        time_use = time.time()-since
-        print("训练和验证耗费的时间{:.0f}m{:.0f}s".format(time_use//60, time_use%60))
-        print("-"*20)
+        # --- 修改: 打印所有指标 ---
+        print("第{}轮  trainloss：{:.4f}  train acc：{:.4f}".format(epoch + 1, train_loss_list[-1], train_acc_list[-1]))
+        print("第{}轮  valloss：  {:.4f}  val acc：  {:.4f}".format(epoch + 1, val_loss_list[-1], val_acc_list[-1]))
+        print(
+            "第{}轮  val_precision: {:.4f} | val_recall: {:.4f} | val_f1: {:.4f} | val_kappa: {:.4f}".format(epoch + 1,
+                                                                                                             precision,
+                                                                                                             recall, f1,
+                                                                                                             kappa))
+
+        time_use = time.time() - since
+        print("训练和验证耗费的时间{:.0f}m{:.0f}s".format(time_use // 60, time_use % 60))
+        print("-" * 20)
         print("\n")
-        #保存最高精确度模型
-        if val_acc_list[-1] > best_acc:
-            print("更新模型：",best_acc," --> ", val_acc_list[-1])
-            best_acc = val_acc_list[-1]
-            best_model_wts = copy.deepcopy(model.state_dict())
-    print("val acc: ",best_acc)
-    torch.save(best_model_wts,'./best_model.pth')
 
+        # 保存最高精确度模型
+        if val_acc_list[-1] > best_acc:
+            print("更新模型：{:.4f} --> {:.4f}".format(best_acc, val_acc_list[-1]))
+            best_acc , best_precision, best_recall , best_f1, best_kappa = val_acc_list[-1], val_precision_list[-1], val_recall_list[-1], val_f1_list[-1], val_kappa_list[-1]
+            best_model_wts = copy.deepcopy(model.state_dict())
+
+    print("val acc: ", best_acc,"best_precision", best_precision, "best_recall" , best_recall, "best_f1", best_f1, "best_kappa", best_kappa)
+    torch.save(best_model_wts, './best_model.pth')
+
+    # 同样，可以返回一个包含所有历史记录的字典
+    # history = {
+    #     'train_loss': train_loss_list, 'train_acc': train_acc_list,
+    #     'val_loss': val_loss_list, 'val_acc': val_acc_list,
+    #     'val_precision': val_precision_list, 'val_recall': val_recall_list,
+    #     'val_f1': val_f1_list, 'val_kappa': val_kappa_list,
+    # }
+    # return model, history
 
 def test_model_process(model, test_dataloader):
     device = "cuda" if torch.cuda.is_available() else 'cpu'

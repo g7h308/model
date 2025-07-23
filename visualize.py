@@ -48,10 +48,10 @@ def get_position_channel_maps(model):
         map_data = shapelet_module.position_channel_map.detach().cpu().numpy()
 
         # 获取该shapelet的长度信息，用于标题
-        shapelet_length = shapelet_module.length
+        shapelet_length = (i+1)*10
 
         # 创建一个有意义的标题
-        title = f'Shapelet Group {i} (Length: {shapelet_length})'
+        title = f'Shapelet Block {i+1} (Length: {shapelet_length}%)'
 
         maps.append((map_data, title))
     return maps
@@ -147,12 +147,25 @@ def visualize_and_save_map(map_data: np.ndarray, title: str, save_path: str):
         cmap=custom_cmap,
         vmin=0,
         vmax=1,
-        cbar_kws={'label': 'Importance Score (Lower is More Important)'}
+        #cbar_kws={'label': 'Importance Score (Lower is More Important)'}
     )
 
-    ax.set_title(title, fontsize=16)
-    ax.set_xlabel("Subsequence Position Index", fontsize=12)
-    ax.set_ylabel("Channel Index", fontsize=12)
+    # 1. 获取 Color Bar 的 Axes 对象
+    # ax.figure.axes 包含了图中的所有子图，最后一个通常是 color bar
+    cbar_ax = ax.figure.axes[-1]
+
+    # 2. 修改 Color Bar 刻度标签的字体大小
+    cbar_ax.tick_params(labelsize=16)  # 你可以调整这里的数值
+
+    # 3. (推荐) 使用 Axes 对象的方法来设置 Color Bar 的标题
+    # 这样做可以让你同时控制标题的字体大小
+    #cbar_ax.set_ylabel('Importance Score (Lower is More Important)', fontsize=16)
+
+    ax.set_title(title, fontsize=18)
+    ax.set_xlabel("Time", fontsize=18)
+    ax.set_ylabel("Channel", fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=16)
+
     plt.xticks(rotation=45)
     plt.savefig(save_path, bbox_inches='tight', dpi=300)  # 提高DPI以获得更清晰的图像
     plt.close()
