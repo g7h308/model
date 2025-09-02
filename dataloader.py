@@ -27,7 +27,7 @@ def load(config):
     Data = {}
     fold_num = config['fold_num']
     problem = config['data_dir'].split('/')[-1]
-    npy_path = os.path.join(config['data_dir'], f"{problem}_fold{fold_num}.npy")
+    npy_path = os.path.join(config['data_dir'], f"{problem}_n2_fold{fold_num}.npy")
 
     # 检查是否已存在预处理数据
     if os.path.exists(npy_path):
@@ -40,10 +40,10 @@ def load(config):
         Data['y_val'] = Data_npy.item().get('y_val')
         Data['X_test'] = Data_npy.item().get('X_test')
         Data['y_test'] = Data_npy.item().get('y_test')
-        if problem == 'PREP':
-            Data['X_train'] = Data['X_train'].transpose(0, 2, 1)
-            Data['X_val'] = Data['X_val'].transpose(0, 2, 1)
-            Data['X_test'] = Data['X_test'].transpose(0, 2, 1)
+        # if problem == 'PREP':
+        #     Data['X_train'] = Data['X_train'].transpose(0, 2, 1)
+        #     Data['X_val'] = Data['X_val'].transpose(0, 2, 1)
+        #     Data['X_test'] = Data['X_test'].transpose(0, 2, 1)
 
         logger.info(f"{len(Data['y_train'])} samples will be used for training")
         logger.info(f"{len(Data['y_val'])} samples will be used for validation")

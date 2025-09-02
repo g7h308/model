@@ -23,7 +23,7 @@ from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=0, type=int)
+parser.add_argument('--fold_num', default=4, type=int)
 
 #VFT和REST任务
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
@@ -184,7 +184,7 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
         val_f1_list.append(f1)
         val_kappa_list.append(kappa)
 
-        # --- 修改: 打印所有指标 ---
+        # ---  打印所有指标 ---
         print("第{}轮  trainloss：{:.4f}  train acc：{:.4f}".format(epoch + 1, train_loss_list[-1], train_acc_list[-1]))
         print("第{}轮  valloss：  {:.4f}  val acc：  {:.4f}".format(epoch + 1, val_loss_list[-1], val_acc_list[-1]))
         print(
@@ -265,12 +265,10 @@ if __name__ == "__main__":
         x_test = torch.tensor(data['X_test'], dtype=torch.float32)
         y_test = torch.tensor(data['y_test'], dtype=torch.long)
 
-        x_train = torch.cat([x_train, x_val], dim=0)
-        y_train = torch.cat([y_train, y_val], dim=0)
+        x_train = torch.cat([x_train, x_test], dim=0)
+        y_train = torch.cat([y_train, y_test], dim=0)
 
-        # 3. 将 test 修改为新的验证集
-        x_val = x_test
-        y_val = y_test
+
 
         in_channels = len(data['X_train'][0])
         seq_length = data['max_len']
@@ -371,17 +369,17 @@ if __name__ == "__main__":
     print(f"模型总可训练参数量: {total_params:,}")
 
 
-    print("=" * 50)
-    print(f"--- Visualizing and Saving Maps BEFORE Training to ./{BEFORE_TRAINING_DIR} ---")
-    print("=" * 50)
-    initial_maps = get_position_channel_maps(model)
-    for map_data, title in initial_maps:
-        # [修改] 创建一个适合做文件名的字符串
-        filename = title.replace(' ', '_').replace('(', '').replace(')', '').replace(':', '') + '.png'
-        # [修改] 构建完整的保存路径
-        save_path = os.path.join(BEFORE_TRAINING_DIR, filename)
-        # [修改] 调用新的可视化并保存函数
-        visualize_and_save_map(map_data, f'[Before Training] {title}', save_path)
+    # print("=" * 50)
+    # print(f"--- Visualizing and Saving Maps BEFORE Training to ./{BEFORE_TRAINING_DIR} ---")
+    # print("=" * 50)
+    # initial_maps = get_position_channel_maps(model)
+    # for map_data, title in initial_maps:
+    #     # [修改] 创建一个适合做文件名的字符串
+    #     filename = title.replace(' ', '_').replace('(', '').replace(')', '').replace(':', '') + '.png'
+    #     # [修改] 构建完整的保存路径
+    #     save_path = os.path.join(BEFORE_TRAINING_DIR, filename)
+    #     # [修改] 调用新的可视化并保存函数
+    #     visualize_and_save_map(map_data, f'[Before Training] {title}', save_path)
 
 
     train_dataset = TensorDataset(x_train, y_train)
@@ -400,17 +398,17 @@ if __name__ == "__main__":
     train_model_process(model,train_loader,val_loader,config)
 
 
-    print("\n" + "=" * 50)
-    print(f"--- Visualizing and Saving Maps AFTER Training to ./{AFTER_TRAINING_DIR} ---")
-    print("=" * 50)
-    model.load_state_dict(torch.load('best_model.pth'))
-    trained_maps = get_position_channel_maps(model)
-    for map_data, title in trained_maps:
-        # [修改] 创建文件名并构建保存路径
-        filename = title.replace(' ', '_').replace('(', '').replace(')', '').replace(':', '') + '.png'
-        save_path = os.path.join(AFTER_TRAINING_DIR, filename)
-        # [修改] 调用新的可视化并保存函数
-        visualize_and_save_map(map_data, f'[After Training] {title}', save_path)
+    # print("\n" + "=" * 50)
+    # print(f"--- Visualizing and Saving Maps AFTER Training to ./{AFTER_TRAINING_DIR} ---")
+    # print("=" * 50)
+    # model.load_state_dict(torch.load('best_model.pth'))
+    # trained_maps = get_position_channel_maps(model)
+    # for map_data, title in trained_maps:
+    #     # [修改] 创建文件名并构建保存路径
+    #     filename = title.replace(' ', '_').replace('(', '').replace(')', '').replace(':', '') + '.png'
+    #     save_path = os.path.join(AFTER_TRAINING_DIR, filename)
+    #     # [修改] 调用新的可视化并保存函数
+    #     visualize_and_save_map(map_data, f'[After Training] {title}', save_path)
 
 
 

@@ -1,5 +1,3 @@
-# --- START OF COMBINED AND SIMPLIFIED FILE ---
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -127,7 +125,7 @@ class ShapeBottleneckModel(nn.Module):
     - DistThresholdSBM 和 SelfAttention 等相关模块已被移除。
     """
 
-    def __init__(self,in_channels,seq_length,num_classes,num_shapelet=[5, 5, 5, 5],shapelet_len=[0.1, 0.2, 0.3, 0.5]):
+    def __init__(self,in_channels,seq_length,num_classes,num_shapelet,shapelet_len):
         super().__init__()
 
         self.num_channel = in_channels
@@ -272,5 +270,3 @@ class InterpGN(nn.Module):
         self.sbm.step()
         for shapelet_module in self.sbm.shapelets:
             shapelet_module.step()
-
-# --- END OF COMBINED AND SIMPLIFIED FILE ---
