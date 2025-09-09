@@ -219,7 +219,13 @@ class ShapeBottleneckModel(nn.Module):
         self.total_shapelets = sum(num_shapelet * self.num_channel)*5
 
         # 初始化分类器 - 简化为只使用一个线性层
-        self.output_layer = nn.Linear(self.total_shapelets, self.num_class, bias=False)
+        hidden_dim = self.total_shapelets // 2
+        self.output_layer = nn.Sequential(
+            nn.Linear(self.total_shapelets, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, self.num_class)
+        )
 
         self.dropout = nn.Dropout(0.5)
         self.distance_func = nn.PairwiseDistance(p=2)  # 用于多样性损失的距离度量
@@ -244,7 +250,7 @@ class ShapeBottleneckModel(nn.Module):
         shapelet_dists = torch.cat(shapelet_dists, dim=-1)
 
         # 预测 - 逻辑被简化，直接通过线性层输出
-        out = self.output_layer(self.dropout(shapelet_probs))
+        out = self.output_layer(shapelet_probs)
 
         return out, ModelInfo(d=shapelet_dists,
                               p=shapelet_probs,
@@ -253,14 +259,15 @@ class ShapeBottleneckModel(nn.Module):
                               loss=self.loss().unsqueeze(0))
 
     def step(self):
-        # 在每步优化后，将分类器权重裁剪为非负值，有助于模型的可解释性
+        # 为了保持模型的可解释性，我们通常只对最后一层的权重进行非负裁剪
+        # 通过索引[-1]可以访问到nn.Sequential中的最后一个模块（即最后一个Linear层）
         with torch.no_grad():
-            self.output_layer.weight.clamp_(0.)
+            self.output_layer[-1].weight.clamp_(0.)
 
     def loss(self):
         # 计算模型的总损失
         # L1正则化损失
-        loss_reg = self.output_layer.weight.abs().mean()
+        loss_reg = self.output_layer[-1].weight.abs().mean()
         # Shapelet多样性损失
         loss_div = self.diversity() if self.lambda_div > 0. else 0.
         return loss_reg * self.lambda_reg + loss_div * self.lambda_div
