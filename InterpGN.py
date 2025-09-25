@@ -222,7 +222,7 @@ class ShapeBottleneckModel(nn.Module):
         hidden_dim = self.total_shapelets // 2
         self.output_layer = nn.Sequential(
             nn.Linear(self.total_shapelets, hidden_dim),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Dropout(0.5),
             nn.Linear(hidden_dim, self.num_class)
         )
