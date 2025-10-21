@@ -117,6 +117,8 @@ class Shapelet(nn.Module):
         # 距离计算
         # d 的形状: (b, m, n, c)
         d = (x - self.weights).abs().mean(dim=-1)
+        # d = torch.sqrt(torch.sum((x - self.weights)**2, dim=-1) + 1e-8)
+        # d = d / np.sqrt(self.length)
 
         # 应用惩罚矩阵
         penalty_map = self.position_channel_map.permute(1, 0).unsqueeze(0).unsqueeze(2)
