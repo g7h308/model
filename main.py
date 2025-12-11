@@ -28,9 +28,9 @@ parser.add_argument('--fold_num', default=0, type=int)
 #VFT和REST任务
 #parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
-parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
 
 parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')

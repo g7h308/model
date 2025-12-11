@@ -25,7 +25,7 @@ class ModelInfo:
 # Shapelet 核心模块 (Shapelet Core Module)
 # ----------------------------------------------------------------------------
 
-k = 5
+k = 1
 
 
 class Shapelet(nn.Module):
@@ -53,61 +53,6 @@ class Shapelet(nn.Module):
         # 初始化为1，表示初始状态下没有惩罚
         self.position_channel_map = nn.Parameter(torch.ones(self.dim, num_subsequences), requires_grad=True)
 
-    # def forward(self, x):
-    #     """
-    #     unfold(对哪一个维度进行操作，滑动窗口长度，步长)。ShapeBottleneckModel已经x = rearrange(x, 'b t c -> b c t')，所以是对第二个维度做滑动窗口
-    #     x变化：(b,c,t) --> (b,c,m,self.length)  其中m=floor((t-self.length)/self.stride)+1  通过滑动窗口切割后子序列的数量
-    #     """
-    #     x = x.unfold(2, self.length, self.stride)
-    #
-    #     # shape变化：(b,c,m,l) --> (b,m,1,c,l)
-    #     x = rearrange(x, 'b c m l -> b m 1 c l')  # .permute((0, 2, 1, 3)).unsqueeze(2)#.contiguous()
-    #
-    #     # 距离计算被简化，现在只使用平均绝对差值。
-    #     """
-    #     广播机制：
-    #     广播前：
-    #     x: (b,m,1,c,l)      self.weights: (n,c,l)
-    #     广播后：
-    #     x: (b,m,n,c,l)      self.weights: (b,m,n,c,l)
-    #
-    #     mean(dim=-1) 会消除最后一个维度
-    #     d：(b,m,n,c)
-    #     """
-    #     d = (x - self.weights).abs().mean(dim=-1)
-    #     # --- 【修改】应用惩罚矩阵 ---
-    #     # self.position_channel_map 的形状是 (c, m)
-    #     # d 的形状是 (b, m, n, c)
-    #     # 我们需要将 map 的形状调整为可以与 d 进行广播相乘
-    #     # (c, m) -> permute(1,0) -> (m, c) -> unsqueeze -> (1, m, 1, c)
-    #     # 这样它就可以和 (b, m, n, c) 的 d 进行广播相乘了
-    #     penalty_map = self.position_channel_map.permute(1, 0).unsqueeze(0).unsqueeze(2)
-    #
-    #     # 将惩罚值与距离相乘。惩罚值越小，代表此位置越重要，距离也越小
-    #     d = d * penalty_map
-    #
-    #
-    #     # Maximum rbf prob，高斯核  p: (b,m,n,c)
-    #     p = torch.exp(-torch.pow(self.eps * d, 2))  # RBF
-    #
-    #     # 直通估计 (Straight-through estimator)
-    #     #这三句代码的作用放在了Straight-Through Estimator(STE).txt文件中进行说明
-    #
-    #     """hard: (b, m, n, c)"""
-    #     hard = torch.zeros_like(p).scatter_(1, p.argmax(dim=1, keepdim=True), 1.)
-    #     """soft: (b, m, n, c)"""
-    #     soft = torch.softmax(p, dim=1)
-    #     """onehot_max：(b, m, n, c)"""
-    #     onehot_max = hard + soft - soft.detach()
-    #
-    #
-    #
-    #     """max_p:(b,n,c) """
-    #     max_p = torch.sum(onehot_max * p, dim=1)
-    #
-    #     """展平操作，max_p:(b,n,c) --> max_p.flatten(start_dim=1): (b,n*c) """
-    #     return max_p.flatten(start_dim=1), d.min(dim=1).values.flatten(start_dim=1)
-
     def forward(self, x):
         """
         unfold(对哪一个维度进行操作，滑动窗口长度，步长)。ShapeBottleneckModel已经x = rearrange(x, 'b t c -> b c t')，所以是对第二个维度做滑动窗口
@@ -116,58 +61,113 @@ class Shapelet(nn.Module):
         x = x.unfold(2, self.length, self.stride)
 
         # shape变化：(b,c,m,l) --> (b,m,1,c,l)
-        x = rearrange(x, 'b c m l -> b m 1 c l')
+        x = rearrange(x, 'b c m l -> b m 1 c l')  # .permute((0, 2, 1, 3)).unsqueeze(2)#.contiguous()
 
-        # 距离计算
-        # d 的形状: (b, m, n, c)
+        # 距离计算被简化，现在只使用平均绝对差值。
+        """
+        广播机制：
+        广播前：
+        x: (b,m,1,c,l)      self.weights: (n,c,l)
+        广播后：
+        x: (b,m,n,c,l)      self.weights: (b,m,n,c,l)
+
+        mean(dim=-1) 会消除最后一个维度
+        d：(b,m,n,c)
+        """
         d = (x - self.weights).abs().mean(dim=-1)
-        # d = torch.sqrt(torch.sum((x - self.weights)**2, dim=-1) + 1e-8)
-        # d = d / np.sqrt(self.length)
-
-        # 应用惩罚矩阵
+        # --- 【修改】应用惩罚矩阵 ---
+        # self.position_channel_map 的形状是 (c, m)
+        # d 的形状是 (b, m, n, c)
+        # 我们需要将 map 的形状调整为可以与 d 进行广播相乘
+        # (c, m) -> permute(1,0) -> (m, c) -> unsqueeze -> (1, m, 1, c)
+        # 这样它就可以和 (b, m, n, c) 的 d 进行广播相乘了
         penalty_map = self.position_channel_map.permute(1, 0).unsqueeze(0).unsqueeze(2)
+
+        # 将惩罚值与距离相乘。惩罚值越小，代表此位置越重要，距离也越小
         d = d * penalty_map
 
-        # 高斯核 p 的形状: (b, m, n, c)
+
+        # Maximum rbf prob，高斯核  p: (b,m,n,c)
         p = torch.exp(-torch.pow(self.eps * d, 2))  # RBF
 
-        # --- 【修改部分开始】 ---
+        # 直通估计 (Straight-through estimator)
+        #这三句代码的作用放在了Straight-Through Estimator(STE).txt文件中进行说明
 
-        # 1. 获取 p 中沿 dim=1 维度最大的 k 个值的索引
-        # topk_indices 的形状: (b, k, n, c)
-        _, topk_indices = torch.topk(p, k, dim=1)
-
-        # 2. (可选，但推荐) 保持直通估计器（STE）的逻辑，以帮助梯度传播
-        # 创建一个 "k-hot" 编码的 hard 张量，在 top-k 的位置上为1，其余为0
-        hard = torch.zeros_like(p).scatter_(1, topk_indices, 1.)
+        """hard: (b, m, n, c)"""
+        hard = torch.zeros_like(p).scatter_(1, p.argmax(dim=1, keepdim=True), 1.)
+        """soft: (b, m, n, c)"""
         soft = torch.softmax(p, dim=1)
-        onehot_k = hard + soft - soft.detach()
+        """onehot_max：(b, m, n, c)"""
+        onehot_max = hard + soft - soft.detach()
 
-        # 3. 计算加权后的概率，但我们不再对它们求和
-        weighted_p = onehot_k * p
 
-        # 4. 使用 gather 根据 topk_indices 精确提取出前 k 个特征向量
-        # topk_features 的形状: (b, k, n, c)
-        topk_features = torch.gather(weighted_p, 1, topk_indices)
 
-        # 5. 重新排列并展平，以得到 (b, n*c*k) 的形状
-        # 首先，交换维度：(b, k, n, c) -> (b, n, c, k)
-        rearranged_features = topk_features.permute(0, 2, 3, 1)
-        # 然后，从第一个维度之后进行展平
-        # 最终形状: (b, n*c*k)
-        output_features = rearranged_features.flatten(start_dim=1)
+        """max_p:(b,n,c) """
+        max_p = torch.sum(onehot_max * p, dim=1)
 
-        # 6. 对第二个返回值（距离 d）也进行同样的操作
-        # 找到 k 个最小的距离值
-        # topk_min_d 的形状: (b, k, n, c)
-        topk_min_d, _ = torch.topk(d, k, dim=1, largest=False)
-        # 同样地，重新排列并展平
-        rearranged_d = topk_min_d.permute(0, 2, 3, 1)  # 形状: (b, n, c, k)
-        output_distances = rearranged_d.flatten(start_dim=1)  # 形状: (b, n*c*k)
+        """展平操作，max_p:(b,n,c) --> max_p.flatten(start_dim=1): (b,n*c) """
+        return max_p.flatten(start_dim=1), d.min(dim=1).values.flatten(start_dim=1)
 
-        # --- 【修改部分结束】 ---
-
-        return output_features, output_distances
+    # def forward(self, x):
+    #     """
+    #     unfold(对哪一个维度进行操作，滑动窗口长度，步长)。ShapeBottleneckModel已经x = rearrange(x, 'b t c -> b c t')，所以是对第二个维度做滑动窗口
+    #     x变化：(b,c,t) --> (b,c,m,self.length)  其中m=floor((t-self.length)/self.stride)+1  通过滑动窗口切割后子序列的数量
+    #     """
+    #     x = x.unfold(2, self.length, self.stride)
+    #
+    #     # shape变化：(b,c,m,l) --> (b,m,1,c,l)
+    #     x = rearrange(x, 'b c m l -> b m 1 c l')
+    #
+    #     # 距离计算
+    #     # d 的形状: (b, m, n, c)
+    #     d = (x - self.weights).abs().mean(dim=-1)
+    #     # d = torch.sqrt(torch.sum((x - self.weights)**2, dim=-1) + 1e-8)
+    #     # d = d / np.sqrt(self.length)
+    #
+    #     # 应用惩罚矩阵
+    #     penalty_map = self.position_channel_map.permute(1, 0).unsqueeze(0).unsqueeze(2)
+    #     d = d * penalty_map
+    #
+    #     # 高斯核 p 的形状: (b, m, n, c)
+    #     p = torch.exp(-torch.pow(self.eps * d, 2))  # RBF
+    #
+    #     # --- 【修改部分开始】 ---
+    #
+    #     # 1. 获取 p 中沿 dim=1 维度最大的 k 个值的索引
+    #     # topk_indices 的形状: (b, k, n, c)
+    #     _, topk_indices = torch.topk(p, k, dim=1)
+    #
+    #     # 2. (可选，但推荐) 保持直通估计器（STE）的逻辑，以帮助梯度传播
+    #     # 创建一个 "k-hot" 编码的 hard 张量，在 top-k 的位置上为1，其余为0
+    #     hard = torch.zeros_like(p).scatter_(1, topk_indices, 1.)
+    #     soft = torch.softmax(p, dim=1)
+    #     onehot_k = hard + soft - soft.detach()
+    #
+    #     # 3. 计算加权后的概率，但我们不再对它们求和
+    #     weighted_p = onehot_k * p
+    #
+    #     # 4. 使用 gather 根据 topk_indices 精确提取出前 k 个特征向量
+    #     # topk_features 的形状: (b, k, n, c)
+    #     topk_features = torch.gather(weighted_p, 1, topk_indices)
+    #
+    #     # 5. 重新排列并展平，以得到 (b, n*c*k) 的形状
+    #     # 首先，交换维度：(b, k, n, c) -> (b, n, c, k)
+    #     rearranged_features = topk_features.permute(0, 2, 3, 1)
+    #     # 然后，从第一个维度之后进行展平
+    #     # 最终形状: (b, n*c*k)
+    #     output_features = rearranged_features.flatten(start_dim=1)
+    #
+    #     # 6. 对第二个返回值（距离 d）也进行同样的操作
+    #     # 找到 k 个最小的距离值
+    #     # topk_min_d 的形状: (b, k, n, c)
+    #     topk_min_d, _ = torch.topk(d, k, dim=1, largest=False)
+    #     # 同样地，重新排列并展平
+    #     rearranged_d = topk_min_d.permute(0, 2, 3, 1)  # 形状: (b, n, c, k)
+    #     output_distances = rearranged_d.flatten(start_dim=1)  # 形状: (b, n*c*k)
+    #
+    #     # --- 【修改部分结束】 ---
+    #
+    #     return output_features, output_distances
 
     # 【新增】step方法用于裁剪惩罚矩阵
     def step(self):
@@ -311,8 +311,8 @@ class InterpGN(nn.Module):
             in_channels,
             seq_length,
             num_classes,
-            num_shapelet=[2, 2, 2, 2, 2],
-            shapelet_len=[0.1, 0.2, 0.3, 0.4, 0.5],
+            num_shapelet=[5, 5, 5, 5],
+            shapelet_len=[0.1, 0.2, 0.3, 0.5],
 
     ):
         super().__init__()
