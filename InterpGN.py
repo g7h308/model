@@ -25,6 +25,9 @@ class ModelInfo:
 # Shapelet 核心模块 (Shapelet Core Module)
 # ----------------------------------------------------------------------------
 
+k = 5
+
+
 class Shapelet(nn.Module):
     """
     简化的Shapelet类。
@@ -49,6 +52,7 @@ class Shapelet(nn.Module):
         # 创建一个可学习的参数，形状为(通道数, 子序列数)
         # 初始化为1，表示初始状态下没有惩罚
         self.position_channel_map = nn.Parameter(torch.ones(self.dim, num_subsequences), requires_grad=True)
+
     # def forward(self, x):
     #     """
     #     unfold(对哪一个维度进行操作，滑动窗口长度，步长)。ShapeBottleneckModel已经x = rearrange(x, 'b t c -> b c t')，所以是对第二个维度做滑动窗口
@@ -129,9 +133,6 @@ class Shapelet(nn.Module):
 
         # --- 【修改部分开始】 ---
 
-        # 定义要选择的 top k 的数量
-        k = 5
-
         # 1. 获取 p 中沿 dim=1 维度最大的 k 个值的索引
         # topk_indices 的形状: (b, k, n, c)
         _, topk_indices = torch.topk(p, k, dim=1)
@@ -168,14 +169,12 @@ class Shapelet(nn.Module):
 
         return output_features, output_distances
 
-
-
-
     # 【新增】step方法用于裁剪惩罚矩阵
     def step(self):
         # 裁剪惩罚矩阵，使其值非负，这保证了惩罚的直观意义
         with torch.no_grad():
             self.position_channel_map.clamp_(min=0.)
+
     def derivative(self):
         # 计算shapelet的导数（相邻点之差），可用于可视化或分析
         return torch.diff(self.weights, dim=-1)
@@ -192,7 +191,7 @@ class ShapeBottleneckModel(nn.Module):
     - DistThresholdSBM 和 SelfAttention 等相关模块已被移除。
     """
 
-    def __init__(self,in_channels,seq_length,num_classes,num_shapelet,shapelet_len):
+    def __init__(self, in_channels, seq_length, num_classes, num_shapelet, shapelet_len):
         super().__init__()
 
         self.num_channel = in_channels
@@ -218,7 +217,7 @@ class ShapeBottleneckModel(nn.Module):
             )
             self.shapelet_len.append(sl)
 
-        self.total_shapelets = sum(num_shapelet * self.num_channel)*5
+        self.total_shapelets = sum(num_shapelet * self.num_channel) * k
 
         # 初始化分类器 - 简化为只使用一个线性层
         hidden_dim = self.total_shapelets // 2
@@ -236,7 +235,7 @@ class ShapeBottleneckModel(nn.Module):
 
     def forward(self, x, *args, **kwargs):
         # 维度重排以匹配shapelet处理的格式
-        #x = rearrange(x, 'b t c -> b c t')
+        # x = rearrange(x, 'b t c -> b c t')
         # 实例归一化 (Instance normalization)
         x = (x - x.mean(dim=-1, keepdims=True)) / (x.std(dim=-1, keepdims=True) + 1e-8)
 
@@ -312,17 +311,17 @@ class InterpGN(nn.Module):
             in_channels,
             seq_length,
             num_classes,
-            num_shapelet=[5, 5, 5, 5, 5],
+            num_shapelet=[2, 2, 2, 2, 2],
             shapelet_len=[0.1, 0.2, 0.3, 0.4, 0.5],
 
     ):
         super().__init__()
         self.sbm = ShapeBottleneckModel(
-            num_shapelet= num_shapelet,
-            shapelet_len= shapelet_len,
+            num_shapelet=num_shapelet,
+            shapelet_len=shapelet_len,
             num_classes=num_classes,
-            in_channels = in_channels,
-            seq_length = seq_length
+            in_channels=in_channels,
+            seq_length=seq_length
         )
 
     def forward(self, x):

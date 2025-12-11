@@ -23,21 +23,22 @@ from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=4, type=int)
+parser.add_argument('--fold_num', default=0, type=int)
 
 #VFT和REST任务
 #parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
-#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
+parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
 
 parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')
-parser.add_argument('--batch_size', default=4, type=int)
+"""小样本中要减小batch_size"""
+parser.add_argument('--batch_size', default=8, type=int)
 parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
-parser.add_argument('--epochs', default=200, type=int)
+parser.add_argument('--epochs', default=100, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
 parser.add_argument('--lambda_div',default=1e-3)
