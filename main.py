@@ -37,14 +37,14 @@ parser.add_argument('--fold_num', default=1, type=int)
 #fNIRS2MW（n-back）任务
 parser.add_argument('--data_path', default='./fNIRS2MW/whole_data')
 
-parser.add_argument('--model',default='InterpGN')
+parser.add_argument('--model',default='InterpGN',choices=['InterpGN','CNN','LSTM'])
 parser.add_argument('--problem', default='VFT')
 """小样本中要减小batch_size"""
-parser.add_argument('--batch_size', default=32, type=int)
+parser.add_argument('--batch_size', default=8, type=int)
 parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
-parser.add_argument('--lr', default=0.01, type=float)
+parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
 parser.add_argument('--lambda_div',default=1e-3)
 parser.add_argument('--lambda_penalty',default=1e-3)
