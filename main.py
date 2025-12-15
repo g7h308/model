@@ -12,9 +12,12 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from model import LocalShapeletModel  # <<< MODIFIED: Changed model import
-from dataloaderMA import KFold_train_test_set, MA_subject_data, UFFT_subject_data
+from dataloaderMA import KFold_train_test_set, MA_subject_data, UFFT_subject_data,load_subjects_raw_data,get_kfold_data,load_process_and_split
 from InterpGN import InterpGN
+from models.CNN import Common1DCNN
+from models.LSTM import CommonLSTM
 import os
+
 from visualize import visualize_and_save_map, get_position_channel_maps
 from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 
@@ -23,23 +26,25 @@ from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=0, type=int)
+parser.add_argument('--fold_num', default=1, type=int)
 
 #VFT和REST任务
 #parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
-parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
+#parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
+#fNIRS2MW（n-back）任务
+parser.add_argument('--data_path', default='./fNIRS2MW/whole_data')
 
 parser.add_argument('--model',default='InterpGN')
 parser.add_argument('--problem', default='VFT')
 """小样本中要减小batch_size"""
-parser.add_argument('--batch_size', default=8, type=int)
+parser.add_argument('--batch_size', default=32, type=int)
 parser.add_argument('--shapelets_num', default=10, type=int, help='总的shapelets数量，每个class均分')
 parser.add_argument('--ratio', default=0.5, type=float, help= 'shaplets长度占时间序列长度的比例')
 parser.add_argument('--epochs', default=100, type=int)
-parser.add_argument('--lr', default=0.001, type=float)
+parser.add_argument('--lr', default=0.01, type=float)
 parser.add_argument('--lambda_shape',default=1e-3)
 parser.add_argument('--lambda_div',default=1e-3)
 parser.add_argument('--lambda_penalty',default=1e-3)
@@ -108,11 +113,14 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
                 penalty_reg = model.shapelet_transformer.penalty_regularization(lambda_l1=lambda_penalty,
                                                                                 lambda_l2=lambda_penalty)
                 total_loss = loss + config['lambda_shape'] * shape_reg + config['lambda_div'] * div_reg + penalty_reg
-            else:
+            elif config['model'] == 'InterpGN':
                 output, model_info = model(b_x)
                 pre_lab = torch.argmax(output, dim=1)
                 total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
-
+            else:
+                output = model(b_x)
+                pre_lab = torch.argmax(output, dim=1)
+                total_loss = nn.functional.cross_entropy(output, b_y)
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
@@ -157,10 +165,14 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
                                                                                     lambda_l2=lambda_penalty)
                     total_loss = loss + config['lambda_shape'] * shape_reg + config[
                         'lambda_div'] * div_reg + penalty_reg
-                else:
+                elif config['model'] == 'InterpGN':
                     output, model_info = model(b_x)
                     pre_lab = torch.argmax(output, dim=1)
                     total_loss = nn.functional.cross_entropy(output, b_y) + model_info.loss.mean()
+                else:
+                    output = model(b_x)
+                    pre_lab = torch.argmax(output, dim=1)
+                    total_loss = nn.functional.cross_entropy(output, b_y)
 
                 val_loss += total_loss.item() * b_x.size(0)
                 val_acc += torch.sum(pre_lab == b_y.data)
@@ -301,7 +313,7 @@ if __name__ == "__main__":
         print("使用数据集：MA")
         print("train.shape: ", x_train.shape)
         print("val.shape: ", x_val.shape)
-    else:
+    elif config['data_path'] == '../fNIRSNet-main/fNIRSNet-main/UFFT_data':
         data_path = config['data_path']
         """
         加载从 1 到 num_subjects 的所有被试数据并合并。
@@ -341,6 +353,18 @@ if __name__ == "__main__":
         print("train.shape: ", x_train.shape)
         print("val.shape: ", x_val.shape)
 
+    else:
+        # all_subjects = load_subjects_raw_data(config['data_path'])
+        #
+        # # 2. 获取第 0 折的数据 (假设一共 5 折)
+        # # 此时 fold_num=0，意味着前 20% 的受试者做测试集，后 80% 做训练集
+        # x_train, y_train, x_val, y_val = get_kfold_data(all_subjects, fold_num=0, k=5, target_labels=[0, 2])
+        x_train, y_train, x_val, y_val = load_process_and_split(config['data_path'],fold_num = config['fold_num'])
+        num_classes = 4
+        seq_length = x_train.shape[2]  # 获取序列长度维度
+        in_channels = x_train.shape[1]  # 获取通道数维度
+
+
     # 输入参数
 
     # in_channels = len(data['X_train'][0])
@@ -352,14 +376,10 @@ if __name__ == "__main__":
 
 
     # 创建模型
-    if config['model'] == 'ShapeletModel':
-        model = LocalShapeletModel(
-            in_channels=in_channels,
-            seq_length=seq_length,
-            num_shapelets=out_channels,
-            shapelet_length=shapelet_length,
-            num_classes=num_classes
-        )
+    if config['model'] == 'CNN':
+        model = Common1DCNN(num_classes=num_classes)
+    elif config['model'] == 'LSTM':
+        model = CommonLSTM(num_classes=num_classes)
     else:
         model = InterpGN(in_channels=in_channels,
             seq_length=seq_length,num_classes=num_classes)

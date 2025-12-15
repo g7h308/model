@@ -4,3 +4,4 @@ best_model.pth
 Straight-Through Estimator(STE).txt
 maps_after_training/
 maps_before_training/
+fNIRS2MW/

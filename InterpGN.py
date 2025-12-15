@@ -311,8 +311,10 @@ class InterpGN(nn.Module):
             in_channels,
             seq_length,
             num_classes,
-            num_shapelet=[5, 5, 5, 5],
-            shapelet_len=[0.1, 0.2, 0.3, 0.5],
+            # num_shapelet=[5, 5, 5, 5],
+            # shapelet_len=[0.1, 0.2, 0.3, 0.5],
+            num_shapelet=[10, 10, 10, 10, 10, 10],
+            shapelet_len=[0.05,0.1,0.2,0.3,0.5,0.8],
 
     ):
         super().__init__()
