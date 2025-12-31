@@ -26,16 +26,16 @@ from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=1, type=int)
+parser.add_argument('--fold_num', default=0, type=int)
 
 #VFT和REST任务
-#parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
 #MA任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
 #UFFT任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/UFFT_data')
 #fNIRS2MW（n-back）任务
-parser.add_argument('--data_path', default='./fNIRS2MW/whole_data')
+#parser.add_argument('--data_path', default='./fNIRS2MW/whole_data')
 
 parser.add_argument('--model',default='InterpGN',choices=['InterpGN','CNN','LSTM'])
 parser.add_argument('--problem', default='VFT')
@@ -58,8 +58,26 @@ def train_model_process(model,train_dataloader,val_dataloader,config):
 
     print("Using device: ", device)
 
-    #优化器
-    optimizer = torch.optim.Adam(model.parameters(),lr=config['lr'])
+    decay_params = []
+    no_decay_params = []
+
+    # 遍历模型所有参数
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+
+        # 关键：绝对不要对 position_channel_map 做 weight_decay
+        if 'position_channel_map' in name or 'bias' in name:
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
+    # 强烈建议使用 AdamW 而不是 Adam，AdamW 对 weight_decay 的处理在数学上更正确
+    optimizer = torch.optim.AdamW([
+        {'params': decay_params, 'weight_decay': 1e-4},  # 这里甚至可以适当调大一点，比如 1e-4
+        {'params': no_decay_params, 'weight_decay': 0.0}  # 关键：这里设为 0
+    ], lr=config['lr'])
+    # --- 修改结束 ---
 
     # 定义学习率调度器 ---
     # 监控 'val_loss'，如果连续 5 个 epoch 验证损失没有下降，则学习率乘以 0.2

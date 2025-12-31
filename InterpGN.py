@@ -224,11 +224,11 @@ class ShapeBottleneckModel(nn.Module):
         self.output_layer = nn.Sequential(
             nn.Linear(self.total_shapelets, hidden_dim),
             nn.LeakyReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.3),
             nn.Linear(hidden_dim, self.num_class)
         )
 
-        self.dropout = nn.Dropout(0.5)
+        self.feature_dropout = nn.Dropout(p=0.2)
         self.distance_func = nn.PairwiseDistance(p=2)  # 用于多样性损失的距离度量
         self.lambda_reg = 0.1  # 分类器权重的L1正则化系数
         self.lambda_div = 0.1  # Shapelet多样性损失系数
@@ -250,6 +250,7 @@ class ShapeBottleneckModel(nn.Module):
         shapelet_probs = torch.cat(shapelet_probs, dim=-1)
         shapelet_dists = torch.cat(shapelet_dists, dim=-1)
 
+        shapelet_probs = self.feature_dropout(shapelet_probs)
         # 预测 - 逻辑被简化，直接通过线性层输出
         out = self.output_layer(shapelet_probs)
 
@@ -311,10 +312,10 @@ class InterpGN(nn.Module):
             in_channels,
             seq_length,
             num_classes,
-            # num_shapelet=[5, 5, 5, 5],
-            # shapelet_len=[0.1, 0.2, 0.3, 0.5],
-            num_shapelet=[10, 10, 10, 10, 10, 10],
-            shapelet_len=[0.05,0.1,0.2,0.3,0.5,0.8],
+            num_shapelet=[5, 5, 5, 5],
+            shapelet_len=[0.1, 0.2, 0.3, 0.5],
+            # num_shapelet=[10, 10, 10, 10, 10, 10],
+            # shapelet_len=[0.05,0.1,0.2,0.3,0.5,0.8],
 
     ):
         super().__init__()
