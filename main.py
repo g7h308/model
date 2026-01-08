@@ -26,7 +26,7 @@ from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=4, type=int)
+parser.add_argument('--fold_num', default=0, type=int)
 
 #VFT和REST任务
 parser.add_argument('--data_path', default='../Dual_Gate_Model/data')

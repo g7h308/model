@@ -249,14 +249,14 @@ if __name__ == '__main__':
     config = {
         # 数据路径 (必须包含 ADHD 文件夹的上一级，或者直接指向 ADHD 文件夹，取决于 dataloader 实现)
         # 根据 user prompt: '../TSCModel/RankSCL/RankSCL/ADHD'
-        'data_path': '../TSCModel/RankSCL/RankSCL/ADHD',
-        'fold_num': 4,  # 默认 fold
+        'data_path': '../Dual_Gate_Model/data',
+        'fold_num': 0,  # 默认 fold
 
         # 模型参数
         'in_channels': 22,  # ADHD 通道数
         'seq_length': 800,  # 序列长度
         'num_classes': 2,  # 类别数
-        'num_shapelet': [5, 5, 5, 5],
+        'num_shapelet': [2, 2, 2, 2],
         'shapelet_len': [0.1, 0.2, 0.3, 0.5],
 
         'model_path': 'best_model.pth',
