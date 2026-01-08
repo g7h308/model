@@ -6,151 +6,194 @@ import warnings
 import logging
 
 warnings.filterwarnings('ignore')
+
+# 配置 Logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-def mean_std(train_data):
-    """Compute mean and std for normalization as in code segment 1."""
-    m_len = np.mean(train_data, axis=2)
-    mean = np.mean(m_len, axis=0)
-    s_len = np.std(train_data, axis=2)
-    std = np.max(s_len, axis=0)
+def compute_stats_channel_wise(train_data):
+    """
+    仅根据训练数据计算均值和标准差。
+    假设 train_data 形状为 (Samples, Time, Channels)
+    我们希望对每个 Channel 进行标准化，因此跨 Samples(0) 和 Time(1) 聚合。
+    """
+    # 均值 shape: (Channels,)
+    mean = np.mean(train_data, axis=(0, 1))
+    # 标准差 shape: (Channels,)
+    std = np.std(train_data, axis=(0, 1))
+
+    # 防止除以0，将极小的std替换为1
+    std[std < 1e-8] = 1.0
+
     return mean, std
 
 
-def mean_std_transform(data, mean, std):
-    """Apply mean-std normalization as in code segment 1."""
+def apply_normalization(data, mean, std):
+    """
+    应用标准化: (Data - Mean) / Std
+    利用广播机制 (Broadcasting) 自动处理维度。
+    Data: (N, T, C), Mean: (C,), Std: (C,)
+    """
     return (data - mean) / std
 
 
 def load(config):
     Data = {}
     fold_num = config['fold_num']
+    # 确保 fold_num 是 int
+    if fold_num is None:
+        raise ValueError("Config 中必须包含 'fold_num'")
+    fold_num = int(fold_num)
+
     problem = config['data_dir'].split('/')[-1]
+    # 文件名建议加上 fold 信息，避免不同 fold 覆盖同一文件
     npy_path = os.path.join(config['data_dir'], f"{problem}_n2_fold{fold_num}.npy")
 
-    # 检查是否已存在预处理数据
+    # --- 1. 检查是否存在预处理文件 ---
     if os.path.exists(npy_path):
-        logger.info("Loading preprocessed data ...")
+        logger.info(f"Loading preprocessed data from {npy_path} ...")
         Data_npy = np.load(npy_path, allow_pickle=True)
-        Data['max_len'] = Data_npy.item().get('max_len')
-        Data['X_train'] = Data_npy.item().get('X_train')
-        Data['y_train'] = Data_npy.item().get('y_train')
-        Data['X_val'] = Data_npy.item().get('X_val')
-        Data['y_val'] = Data_npy.item().get('y_val')
-        Data['X_test'] = Data_npy.item().get('X_test')
-        Data['y_test'] = Data_npy.item().get('y_test')
-        # if problem == 'PREP':
-        #     Data['X_train'] = Data['X_train'].transpose(0, 2, 1)
-        #     Data['X_val'] = Data['X_val'].transpose(0, 2, 1)
-        #     Data['X_test'] = Data['X_test'].transpose(0, 2, 1)
+        item = Data_npy.item()
 
-        logger.info(f"{len(Data['y_train'])} samples will be used for training")
-        logger.info(f"{len(Data['y_val'])} samples will be used for validation")
-        logger.info(f"{len(Data['y_test'])} samples will be used for testing")
+        Data['max_len'] = item.get('max_len')
+        Data['X_train'] = item.get('X_train')
+        Data['y_train'] = item.get('y_train')
+        Data['X_val'] = item.get('X_val')
+        Data['y_val'] = item.get('y_val')
+        Data['X_test'] = item.get('X_test')
+        Data['y_test'] = item.get('y_test')
+
+        # 兼容性加载（如果存在全量训练数据）
+        Data['All_train_data'] = item.get('All_train_data')
+        Data['All_train_label'] = item.get('All_train_label')
+
+        logger.info(f"Loaded: Train({len(Data['y_train'])}), Val({len(Data['y_val'])}), Test({len(Data['y_test'])})")
 
     else:
-        logger.info("Loading and preprocessing data ...")
-        # 扩大倍数   任务态VFT  n=2  静息态PREP n=4
-        n = 4
+        # --- 2. 加载原始 Excel 数据 ---
+        logger.info("Loading and preprocessing data from Excel files ...")
+
+        # 参数设置
+        n = 2  # 扩增倍数/降采样因子
         adhd_dir = os.path.join(config['data_dir'], "ADHD")
         hc_dir = os.path.join(config['data_dir'], "HC")
 
-        # 读取所有Excel文件
-        adhd_files = [os.path.join(adhd_dir, f) for f in os.listdir(adhd_dir) if f.endswith('.xlsx')]
-        hc_files = [os.path.join(hc_dir, f) for f in os.listdir(hc_dir) if f.endswith('.xlsx')]
+        # 读取文件列表
+        adhd_files = sorted([os.path.join(adhd_dir, f) for f in os.listdir(adhd_dir) if f.endswith('.xlsx')])
+        hc_files = sorted([os.path.join(hc_dir, f) for f in os.listdir(hc_dir) if f.endswith('.xlsx')])
 
-        # 加载数据并分配标签
         dataframes = []
         labels = []
-        group_ids = []  # NEW: 用于跟踪每个样本的组标识
+        group_ids = []  # 用于 GroupKFold，防止同一人数据泄露
 
-        # 处理 ADHD 数据 (label = 1)
+        # 加载 ADHD (Label=1)
         for idx, file in enumerate(adhd_files):
             df = pd.read_excel(file)
-            dataframes.append(df)
-            labels.append(1)  # ADHD标签为1
-            group_ids.append(idx)  # NEW: 为每个 ADHD 文件分配唯一 group_id
+            dataframes.append(df.values)  # 转为numpy array
+            labels.append(1)
+            group_ids.append(idx)  # 唯一ID
 
-        # 处理 HC 数据 (label = 0)
-        for idx, file in enumerate(hc_files, len(adhd_files)):  # NEW: 从 len(adhd_files) 开始继续编号
+        # 加载 HC (Label=0)
+        # Group ID 继续累加，不与 ADHD 重复
+        start_id = len(adhd_files)
+        for idx, file in enumerate(hc_files):
             df = pd.read_excel(file)
-            dataframes.append(df)
-            labels.append(0)  # HC标签为0
-            group_ids.append(idx)  # NEW: 为每个 HC 文件分配唯一 group_id
+            dataframes.append(df.values)
+            labels.append(0)
+            group_ids.append(start_id + idx)
 
-        # 转换为numpy数组
-        feature = np.array(dataframes)
+        # 转换为 numpy 格式
+        # 假设所有 excel 形状相同，或者这里需要 padding (目前代码假设形状一致)
+        feature_raw = np.array(dataframes)
+        # 当前 shape: (Samples, Time, Features)
+
         labels = np.array(labels)
-        group_ids = np.array(group_ids)  # NEW: 转换为 numpy 数组
-        logger.info(f"feature 原始shape：{feature.shape}")
+        group_ids = np.array(group_ids)
 
-        # 获取原始数据的形状
-        n_samples, n_time, n_features = feature.shape
+        logger.info(f"Raw feature shape: {feature_raw.shape}")
+        n_samples, n_time, n_features = feature_raw.shape
 
-        # 计算可被n整除的最大时间长度
+        # --- 3. 数据扩增 / 切分 ---
+        # 调整时间长度以适应 n
         n_time_adjusted = (n_time // n) * n
-        logger.info(f"调整后的时间维度长度: {n_time_adjusted}（原始: {n_time}）")
 
-        # 数据扩增：将时间维度分割为n份
         split_features = []
         split_labels = []
-        split_groups = []  # NEW: 用于存储扩展后的 group_ids
+        split_groups = []
+
         for i in range(n):
+            # 这里的逻辑是降采样 (Downsampling)
+            # 例如 n=2, 取 t=0,2,4... 和 t=1,3,5...
             indices = np.arange(i, n_time_adjusted, n)
-            split_data = feature[:, indices, :]
-            split_features.append(split_data)
+
+            sub_data = feature_raw[:, indices, :]
+            split_features.append(sub_data)
+
+            # 标签和组ID 复制一份
             split_labels.append(labels)
-            split_groups.append(group_ids)  # NEW: 扩展 group_ids，保持与样本对应
+            split_groups.append(group_ids)
 
-        # 合并分割后的特征和标签
-        feature = np.concatenate(split_features, axis=0)  # 形状变为 (n*n_samples, n_time//n, n_features)
-        label = np.concatenate(split_labels, axis=0)  # 形状变为 (n*n_samples,)
-        groups = np.concatenate(split_groups, axis=0)  # NEW: 形状变为 (n*n_samples,)
-        logger.info(f"feature 合并后shape：{feature.shape}")
+        # 合并扩增后的数据
+        feature = np.concatenate(split_features, axis=0)  # (Samples*n, Time/n, Features)
+        label = np.concatenate(split_labels, axis=0)
+        groups = np.concatenate(split_groups, axis=0)
 
-        # 数据标准化（使用代码段1的mean_std和mean_std_transform）
+        logger.info(f"Augmented feature shape: {feature.shape}")
+        Data['max_len'] = feature.shape[1]  # 记录时间维度长度
 
-        mean, std = mean_std(feature)
-        # mean = np.repeat(mean, feature.shape[1]).reshape(feature.shape[2], feature.shape[1])
-        # std = np.repeat(std, feature.shape[1]).reshape(feature.shape[2], feature.shape[1])
-        feature = mean_std_transform(feature, mean, std)
+        # --- 4. 数据集划分 (Split) ---
+        # 此时 feature shape: (N, T, C)
 
-
-        # 设置max_len
-        Data['max_len'] = feature.shape[1]  # 时间维度长度
-
-        feature = feature.transpose(0, 2, 1)
-
-        # 先将数据分为 train+val（80%）和 test（20%）
-        gss = GroupShuffleSplit(test_size=0.2, random_state=42)
+        # Step A: 划分 Train+Val (80%) 和 Test (20%)
+        # random_state 固定为 42，确保不同 Fold 下，测试集是同一个，保证公平
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
         train_val_idx, test_idx = next(gss.split(feature, label, groups))
+
         X_train_val = feature[train_val_idx]
         y_train_val = label[train_val_idx]
         groups_train_val = groups[train_val_idx]
+
         X_test = feature[test_idx]
         y_test = label[test_idx]
 
-        # 对 train+val 进行 5 折交叉验证
+        # Step B: 对 Train+Val 进行 5折交叉验证，划分出 Train 和 Val
+        # 注意：这里不需要 random_state 固定，GroupKFold 是确定性的
         gkf = GroupKFold(n_splits=5)
-        fold_indices = list(gkf.split(X_train_val, y_train_val, groups_train_val))
+        folds = list(gkf.split(X_train_val, y_train_val, groups_train_val))
 
-        # NEW: 验证 fold_num 是否有效
-        if fold_num is None or fold_num not in range(5):
-            raise ValueError("fold_num 必须为 0 到 4 的整数")
+        if fold_num >= 5:
+            raise ValueError("fold_num cannot exceed 4 for 5-fold CV")
 
-        # 选择指定折的训练和验证索引
-        train_idx, val_idx = fold_indices[fold_num]
+        train_idx, val_idx = folds[fold_num]
+
         X_train = X_train_val[train_idx]
         y_train = y_train_val[train_idx]
+
         X_val = X_train_val[val_idx]
         y_val = y_train_val[val_idx]
 
-        # 打印当前折的结果
-        print(f"\n=== 第 {fold_num} 折 ===")
-        print(f"训练集大小: {X_train.shape[0]} 样本, 组: {np.unique(groups_train_val[train_idx])}")
-        print(f"验证集大小: {X_val.shape[0]} 样本, 组: {np.unique(groups_train_val[val_idx])}")
+        logger.info(f"Fold {fold_num} Split:")
+        logger.info(f"  Train: {X_train.shape[0]} (Groups: {len(np.unique(groups_train_val[train_idx]))})")
+        logger.info(f"  Val:   {X_val.shape[0]} (Groups: {len(np.unique(groups_train_val[val_idx]))})")
+        logger.info(f"  Test:  {X_test.shape[0]}")
 
+        # --- 5. 标准化 (Normalization) ---
+        # 【重要】仅在 X_train 上计算均值和方差，避免数据泄露
+        mean_vec, std_vec = compute_stats_channel_wise(X_train)
+
+        # 应用到所有数据集
+        X_train = apply_normalization(X_train, mean_vec, std_vec)
+        X_val = apply_normalization(X_val, mean_vec, std_vec)
+        X_test = apply_normalization(X_test, mean_vec, std_vec)
+
+        # --- 6. 维度转换 (Transpose) ---
+        # 从 (N, T, C) -> (N, C, T) 以适应大多数深度学习模型 (如 1D-CNN)
+        X_train = X_train.transpose(0, 2, 1)
+        X_val = X_val.transpose(0, 2, 1)
+        X_test = X_test.transpose(0, 2, 1)
+
+        # --- 7. 组装与保存 ---
         Data['X_train'] = X_train
         Data['y_train'] = y_train
         Data['X_val'] = X_val
@@ -158,19 +201,12 @@ def load(config):
         Data['X_test'] = X_test
         Data['y_test'] = y_test
 
+        # 如果需要合并的训练集 (用于某些特殊的后续处理，通常不需要)
+        Data['All_train_data'] = np.concatenate([X_train, X_val], axis=0)
+        Data['All_train_label'] = np.concatenate([y_train, y_val], axis=0)
 
-
-        # 合并训练集和验证集的特征
-        Data['All_train_data'] = np.concatenate([Data['X_train'], Data['X_val']], axis=0)
-
-        # 合并训练集和验证集的标签
-        Data['All_train_label'] = np.concatenate([Data['y_train'], Data['y_val']], axis=0)
-
-        logger.info(f"{len(y_train)} samples will be used for training")
-        logger.info(f"{len(y_val)} samples will be used for validation")
-        #logger.info(f"{len(labels[test_idx])} samples will be used for testing")
-
-        # 保存预处理数据
+        # 保存为 .npy
         np.save(npy_path, Data, allow_pickle=True)
+        logger.info(f"Data saved to {npy_path}")
 
     return Data
