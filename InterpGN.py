@@ -228,7 +228,7 @@ class ShapeBottleneckModel(nn.Module):
             nn.Linear(hidden_dim, self.num_class)
         )
 
-        self.feature_dropout = nn.Dropout(p=0.2)
+        self.feature_dropout = nn.Dropout(p=0.5)
         self.distance_func = nn.PairwiseDistance(p=2)  # 用于多样性损失的距离度量
         self.lambda_reg = 0.1  # 分类器权重的L1正则化系数
         self.lambda_div = 0.1  # Shapelet多样性损失系数
@@ -312,7 +312,7 @@ class InterpGN(nn.Module):
             in_channels,
             seq_length,
             num_classes,
-            num_shapelet=[5, 5, 5, 5],
+            num_shapelet=[2, 2, 2, 2],
             shapelet_len=[0.1, 0.2, 0.3, 0.5],
             # num_shapelet=[10, 10, 10, 10, 10, 10],
             # shapelet_len=[0.05,0.1,0.2,0.3,0.5,0.8],

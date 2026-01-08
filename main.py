@@ -29,7 +29,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--fold_num', default=4, type=int)
 
 #VFT和REST任务
-parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
+parser.add_argument('--data_path', default='../Dual_Gate_Model/data')
 parser.add_argument('--problem', default='VFT')
 #MA任务
 #parser.add_argument('--data_path', default='../fNIRSNet-main/fNIRSNet-main/predata')
@@ -284,7 +284,7 @@ if __name__ == "__main__":
     os.makedirs(BEFORE_TRAINING_DIR, exist_ok=True)
     os.makedirs(AFTER_TRAINING_DIR, exist_ok=True)
 
-    if config['data_path'] ==  '../TSCModel/RankSCL/RankSCL/ADHD':
+    if config['data_path'] ==  '../Dual_Gate_Model/data':
         config['data_dir'] = config['data_path'] + "/" + config['problem']
         data = dataloader.load(config)
         print("train_size: ", data['X_train'].shape)

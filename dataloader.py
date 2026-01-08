@@ -76,8 +76,8 @@ def load(config):
 
         # 参数设置
         n = 2  # 扩增倍数/降采样因子
-        adhd_dir = os.path.join(config['data_dir'], "ADHD")
-        hc_dir = os.path.join(config['data_dir'], "HC")
+        adhd_dir = os.path.join(config['data_dir'], "ADHD_xlsx")
+        hc_dir = os.path.join(config['data_dir'], "HC_xlsx")
 
         # 读取文件列表
         adhd_files = sorted([os.path.join(adhd_dir, f) for f in os.listdir(adhd_dir) if f.endswith('.xlsx')])
