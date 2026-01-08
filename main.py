@@ -26,7 +26,7 @@ from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--fold_num', default=0, type=int)
+parser.add_argument('--fold_num', default=3, type=int)
 
 #VFT和REST任务
 parser.add_argument('--data_path', default='../TSCModel/RankSCL/RankSCL/ADHD')
@@ -296,8 +296,8 @@ if __name__ == "__main__":
         x_test = torch.tensor(data['X_test'], dtype=torch.float32)
         y_test = torch.tensor(data['y_test'], dtype=torch.long)
 
-        x_train = torch.cat([x_train, x_test], dim=0)
-        y_train = torch.cat([y_train, y_test], dim=0)
+        x_train = torch.cat([x_train, x_val], dim=0)
+        y_train = torch.cat([y_train, y_val], dim=0)
 
 
 
@@ -422,7 +422,7 @@ if __name__ == "__main__":
 
 
     train_dataset = TensorDataset(x_train, y_train)
-    val_dataset = TensorDataset(x_val, y_val)
+    val_dataset = TensorDataset(x_test, y_test)
     #test_dataset = TensorDataset(x_test,y_test)
 
     # Define batch size (adjust as needed)
